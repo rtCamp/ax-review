@@ -2,7 +2,6 @@
   "name": "ax-review",
   "version": "1.0.0",
   "description": "GitHub Action for automated WCAG 2.2 accessibility review of PR diffs using LLMs",
-  "type": "module",
   "main": "dist/index.js",
   "scripts": {
     "build": "npx esbuild src/index.ts --bundle --outfile=dist/index.js --platform=node --minify",

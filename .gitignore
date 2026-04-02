@@ -4,11 +4,7 @@ node_modules/
 .pnpm-debug.log
 
 # Build output
-dist/
-*.js
 *.js.map
-*.d.ts
-!.github/actions/*/dist/index.js
 
 # IDEs and Editors
 .vscode/

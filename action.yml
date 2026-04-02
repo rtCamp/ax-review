@@ -1,0 +1,69 @@
+name: 'ax-review'
+description: 'Automated WCAG 2.2 accessibility review of PR diffs using LLMs'
+author: ''
+branding:
+  icon: 'eye'
+  color: 'blue'
+
+inputs:
+  github-token:
+    description: 'GitHub API token for PR access'
+    required: true
+    default: '${{ github.token }}'
+
+  llm-provider:
+    description: 'LLM provider to use (gemini or ollama)'
+    required: true
+    default: 'gemini'
+
+  api-key:
+    description: 'API key for the LLM provider. Required for both Gemini and Ollama.'
+    required: false
+
+  model:
+    description: 'Model name to use (provider-specific defaults if not specified)'
+    required: false
+
+  ollama-url:
+    description: 'Ollama Cloud API endpoint (default: https://ollama.com)'
+    required: false
+    default: 'https://ollama.com'
+
+  output-mode:
+    description: 'Output format: "checks" (default, recommended) for Check Run annotations, or "comments" for PR review comments'
+    required: false
+    default: 'checks'
+
+  fail-on-issues:
+    description: 'Fail the action if VIOLATION issues are found'
+    required: false
+    default: 'true'
+
+  max-files:
+    description: 'Maximum number of files to analyze (0 for unlimited)'
+    required: false
+    default: '100'
+
+  batch-size:
+    description: 'Number of files per LLM request'
+    required: false
+    default: '20'
+
+  skip-drafts:
+    description: 'Skip analysis for draft PRs'
+    required: false
+    default: 'true'
+
+outputs:
+  issues-found:
+    description: 'Total number of issues found'
+
+  violations:
+    description: 'Number of VIOLATION severity issues'
+
+  good-practices:
+    description: 'Number of GOOD_PRACTICE severity issues'
+
+runs:
+  using: 'node24'
+  main: 'dist/index.js'

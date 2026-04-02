@@ -1,0 +1,106 @@
+# Comprehensive Workflow - All Options
+# Shows all available configuration options with comments
+# Best for: Reference when customizing for specific needs
+
+name: Accessibility Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  # Also allow manual trigger
+  workflow_dispatch:
+    inputs:
+      pr-number:
+        description: 'PR number to review (optional)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+jobs:
+  a11y-review:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Gitleaks (Secret Detection)
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz | tar -xz
+          sudo mv gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: Run Accessibility Review
+        uses: your-org/ax-review@v1
+        with:
+          # ===========================================
+          # REQUIRED INPUTS
+          # ===========================================
+          
+          # GitHub token for API access
+          # Default: ${{ github.token }} (automatically provided)
+          # Required: yes
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          
+          # LLM provider: 'gemini' or 'ollama'
+          # Required: yes
+          llm-provider: gemini
+          
+          # API key for LLM provider
+          # Required: yes for both Gemini and Ollama Cloud
+          # Get Gemini key: https://aistudio.google.com/apikey
+          # Get Ollama key: https://ollama.com/settings/keys
+          api-key: ${{ secrets.GEMINI_API_KEY }}
+          
+          # ===========================================
+          # OPTIONAL INPUTS
+          # ===========================================
+          
+          # Model name (provider-specific)
+          # Gemini default: gemini-2.0-flash
+          # Ollama default: llama3.2
+          model: gemini-2.0-flash
+          
+          # Output format
+          # 'checks' - Creates Check Run annotations (recommended)
+          # 'comments' - Creates PR review comments
+          # Default: checks
+          output-mode: checks
+          
+          # Fail workflow on VIOLATION issues
+          # true - Fail if CRITICAL/SERIOUS/MODERATE found
+          # false - Post results but don't fail
+          # Default: true
+          fail-on-issues: true
+          
+          # Maximum files to analyze
+          # Set to 0 for unlimited (not recommended)
+          # Default: 100
+          max-files: 100
+          
+          # Files per LLM batch request
+          # Lower = faster individual responses, more API calls
+          # Higher = slower individual responses, fewer API calls
+          # Default: 20
+          batch-size: 20
+          
+          # Skip draft PRs
+          # true - Don't analyze draft PRs
+          # false - Analyze all PRs including drafts
+          # Default: true
+          skip-drafts: true
+          
+          # ===========================================
+          # OLLAMA-SPECIFIC (only if llm-provider: ollama)
+          # ===========================================
+          
+          # Ollama server URL
+          # Default: https://ollama.com (Ollama Cloud)
+          # For self-hosted: http://your-server:11434
+          # ollama-url: ${{ secrets.OLLAMA_SERVER_URL }}

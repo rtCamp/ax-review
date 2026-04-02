@@ -1,0 +1,40 @@
+# Production Workflow - PR Comments
+# Uses PR review comments for inline feedback on Files Changed tab
+# Best for: Direct line-by-line feedback, easier for developers to see issues
+
+name: Accessibility Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+jobs:
+  a11y-review:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Gitleaks
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz | tar -xz
+          sudo mv gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: Run Accessibility Review
+        uses: your-org/ax-review@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          llm-provider: gemini
+          api-key: ${{ secrets.GEMINI_API_KEY }}
+          model: gemini-2.0-flash
+          output-mode: comments
+          fail-on-issues: true
+          max-files: 100
+          batch-size: 20

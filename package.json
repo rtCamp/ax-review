@@ -1,0 +1,34 @@
+{
+  "name": "ax-review",
+  "version": "1.0.0",
+  "description": "GitHub Action for automated WCAG 2.2 accessibility review of PR diffs using LLMs",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "npx esbuild src/index.ts --bundle --outfile=dist/index.js --platform=node --target=node20 --format=cjs --minify --sourcemap",
+    "dev": "npx tsx src/index.ts",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "typecheck": "npx tsc --noEmit"
+  },
+  "keywords": [
+    "accessibility",
+    "wcag",
+    "a11y",
+    "github-action",
+    "pull-request",
+    "code-review"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@actions/core": "^3.0.0",
+    "@actions/github": "^9.0.0",
+    "@google/generative-ai": "^0.24.1",
+    "ollama": "^0.6.3"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.11",
+    "@types/node": "^25.5.0",
+    "typescript": "^6.0.2"
+  }
+}

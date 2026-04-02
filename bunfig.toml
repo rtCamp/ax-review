@@ -1,0 +1,13 @@
+# Bun configuration for ax-review
+
+[install]
+production = false
+
+[build]
+target = "node"
+minify = true
+sourcemap = "external"
+
+[test]
+preload = ["./tests/setup.ts"]
+coverage = true

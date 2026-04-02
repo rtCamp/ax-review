@@ -11,7 +11,7 @@ import { LLM_LIMITS } from '../constants';
 /**
  * Default model for Ollama Cloud.
  */
-const DEFAULT_MODEL = 'llama3.2';
+const DEFAULT_MODEL = 'minimax-m2.7:cloud';
 
 /**
  * Ollama Cloud API endpoint.
@@ -212,8 +212,7 @@ export class OllamaClient {
       return new LLMError(
         `${message}\n\nTroubleshooting:\n` +
         `1. Model '${this.model}' not found\n` +
-        `2. Check available models at: https://ollama.com/search?c=cloud\n` +
-        `3. Try: llama3.2, llama3.1:70b, mistral, deepseek-coder`,
+        `2. Check available models at: https://ollama.com/search?c=cloud\n`,
         undefined,
         false
       );

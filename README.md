@@ -252,7 +252,7 @@ If you're running your own Ollama server:
 | `github-token` | Yes | `${{ github.token }}` | GitHub API token for PR operations |
 | `llm-provider` | Yes | `gemini` | LLM provider: `gemini` or `ollama` |
 | `api-key` | Yes* | — | API key for LLM provider (**Required for both Gemini and Ollama**) |
-| `model` | No | Provider default | Model name (e.g., `gemini-2.0-flash`, `llama3.2`) |
+| `model` | No | Provider default | Model name (e.g., `gemini-2.0-flash`, `minimax-m2.7:cloud`) |
 | `ollama-url` | No | `https://ollama.com` | Ollama Cloud or self-hosted server URL |
 | `output-mode` | No | `checks` | Output format: `checks` (recommended) or `comments` |
 | `fail-on-issues` | No | `true` | Fail workflow on VIOLATION issues |
@@ -266,8 +266,8 @@ If you're running your own Ollama server:
 
 | Provider | Default Model | Recommended Alternatives |
 |----------|---------------|-------------------------|
-| Gemini | `gemini-2.0-flash` | `gemini-2.0-pro`, `gemini-2.0-flash-lite` |
-| Ollama | `llama3.2` | `llama3.1`, `qwen2.5-coder:32b`, `mistral` |
+| Gemini | `gemini-3-flash-preview` | `gemini-2.5-pro`, `gemini-2.5-flash` |
+| Ollama | `minimax-m2.7:cloud` | `kimi-k2.5:cloud`, `glm-5:cloud` |
 
 ### Outputs
 

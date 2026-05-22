@@ -1,0 +1,680 @@
+name: Accessibility Review 
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+  workflow_dispatch:
+    inputs:
+      input-type:
+        description: "Input type: urls | csv | sitemap"
+        required: true
+        default: "urls"
+        type: choice
+        options:
+          - urls
+          - csv
+          - sitemap
+      urls:
+        description: "URLs, local CSV path, or sitemap URL(s) (based on input-type)"
+        required: true
+        default: "https://example.com"
+
+jobs:
+
+  # Job 1 - AI Code review (Runs on PRs)
+  code-review:
+    name: AI Accessibility Code Review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    permissions:
+      contents: read
+      pull-requests: write
+      checks: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install Gitleaks
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz | tar -xz
+          sudo mv gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: Run Accessibility Review
+        uses: rtCamp/ax-review@v1.0.3
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          llm-provider: ollama
+          model: gpt-oss:120b-cloud
+          api-key: ${{ secrets.OLLAMA_API_KEY }}
+          output-mode: comments
+          fail-on-issues: true
+          max-files: 50
+          batch-size: 10
+
+  # Job 2 - URL audit (Runs manually via workflow_dispatch)
+  url-audit:
+    name: URL Accessibility Audit
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+
+    permissions:
+      issues: write
+      contents: read
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 'lts/*'
+
+      - name: Resolve URLs
+        run: |
+          cat << 'SCRIPT' > resolve-urls.js
+          const fs = require('fs');
+          const path = require('path');
+          const http = require('https');
+          const httpPlain = require('http');
+
+          const inputType = process.env.INPUT_TYPE.trim();
+          const input     = process.env.INPUT_VALUE.trim();
+
+          function fetch(url) {
+            return new Promise((resolve, reject) => {
+              const client = url.startsWith('https') ? http : httpPlain;
+              client.get(url, (res) => {
+                if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                  const redirectUrl = res.headers.location;
+                  res.resume();
+                  return resolve(fetch(redirectUrl));
+                }
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => resolve(data));
+              }).on('error', reject);
+            });
+          }
+
+          function extractSitemapUrls(xml) {
+            const matches = [...xml.matchAll(/<loc>\s*(.*?)\s*<\/loc>/gi)];
+            return matches.map(m => m[1].trim()).filter(Boolean);
+          }
+
+          async function resolveSitemap(url, visited) {
+            if (visited.has(url)) {
+              console.warn(`Already visited ${url}, skipping to avoid cycles`);
+              return [];
+            }
+            visited.add(url);
+            console.log(`Resolving sitemap: ${url}`);
+            const content = await fetch(url);
+            const extracted = extractSitemapUrls(content);
+            const results = [];
+            for (const item of extracted) {
+              if (/\.xml(\?|$)/i.test(item)) {
+                results.push(...await resolveSitemap(item, visited));
+              } else {
+                results.push(item);
+              }
+            }
+            return [...new Set(results)];
+          }
+
+          function extractCsvUrls(csv) {
+            const lines = csv.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+            if (lines.length === 0) return [];
+            const header = lines[0].toLowerCase().split(',').map(h => h.trim().replace(/^"|"$/g, ''));
+            const urlColIndex = header.findIndex(h => h === 'url' || h === 'urls');
+            const hasHeader = urlColIndex !== -1 || !header[0].startsWith('http');
+            const dataLines = hasHeader ? lines.slice(1) : lines;
+            const colIndex  = urlColIndex !== -1 ? urlColIndex : 0;
+            return dataLines
+              .map(line => {
+                const cols = line.split(',');
+                return (cols[colIndex] || '').trim().replace(/^"|"$/g, '');
+              })
+              .filter(v => v.startsWith('http'));
+          }
+
+          async function main() {
+            let urls = [];
+
+            if (inputType === 'sitemap') {
+              const sitemapEntries = input.split(',').map(s => s.trim()).filter(Boolean);
+              console.log(`Resolving ${sitemapEntries.length} sitemap(s)...`);
+              const visited = new Set();
+              for (const sitemapUrl of sitemapEntries) {
+                const found = await resolveSitemap(sitemapUrl, visited);
+                console.log(`  ${sitemapUrl}: ${found.length} URL(s)`);
+                urls.push(...found);
+              }
+              urls = [...new Set(urls)];
+              console.log(`Found ${urls.length} unique URL(s) across all sitemaps`);
+
+            } else if (inputType === 'csv') {
+              console.log(`Reading local CSV: ${input}`);
+              try {
+                const csvContent = fs.readFileSync(path.resolve(input), 'utf8');
+                urls = extractCsvUrls(csvContent);
+              } catch (err) {
+                console.error(`Failed to read local CSV file: ${err.message}`);
+                process.exit(1);
+              }
+              console.log(`Found ${urls.length} URL(s) in CSV`);
+
+            } else {
+              urls = input.split(',').map(u => u.trim()).filter(Boolean);
+              console.log(`Using ${urls.length} URL(s) from direct input`);
+            }
+
+            if (urls.length === 0) {
+              console.error('No valid URLs found. Aborting.');
+              process.exit(1);
+            }
+
+            fs.writeFileSync('resolved-urls.txt', urls.join(','), 'utf8');
+            console.log(`resolved-urls.txt written with ${urls.length} URL(s)`);
+          }
+
+          main().catch(err => { console.error(err); process.exit(1); });
+          SCRIPT
+          node resolve-urls.js
+        env:
+          INPUT_TYPE:  ${{ github.event.inputs.input-type }}
+          INPUT_VALUE: ${{ github.event.inputs.urls }}
+
+      - name: Install deps
+        run: |
+          npm init -y
+          npm install playwright @axe-core/playwright lighthouse
+          npm install -g pa11y
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium
+
+      - name: Run axe-core (Playwright)
+        run: |
+          cat << 'EOF' > axe-test.js
+          const { chromium } = require('playwright');
+          const AxeBuilder = require('@axe-core/playwright').default;
+          const fs = require('fs');
+
+          function safeSegment(str) {
+            return String(str || '')
+              .replace(/[^a-zA-Z0-9.\-]/g, '_')
+              .replace(/_+/g, '_')
+              .replace(/^_|_$/g, '')
+              .slice(0, 80);
+          }
+
+          async function highlightedViewport(page, selector, filename) {
+            await page.locator(selector).first().scrollIntoViewIfNeeded();
+
+            await page.evaluate((sel) => {
+              const el = document.querySelector(sel);
+              if (!el) return;
+              el.dataset._a11yPrevOutline    = el.style.outline;
+              el.dataset._a11yPrevBoxShadow  = el.style.boxShadow;
+              el.style.outline   = '3px solid red';
+              el.style.boxShadow = '0 0 0 3px rgba(255,0,0,0.3)';
+            }, selector);
+
+            await page.screenshot({ path: filename, animations: 'disabled' });
+
+            await page.evaluate((sel) => {
+              const el = document.querySelector(sel);
+              if (!el) return;
+              el.style.outline   = el.dataset._a11yPrevOutline   || '';
+              el.style.boxShadow = el.dataset._a11yPrevBoxShadow || '';
+              delete el.dataset._a11yPrevOutline;
+              delete el.dataset._a11yPrevBoxShadow;
+            }, selector);
+          }
+
+          (async () => {
+            const browser = await chromium.launch();
+            const context = await browser.newContext({ ignoreHTTPSErrors: true });
+            const urls = process.env.TEST_URLS.split(',');
+            const allResults = [];
+
+            fs.mkdirSync('screenshots', { recursive: true });
+
+            for (const rawUrl of urls) {
+              const url = rawUrl.trim();
+              if (!url) continue;
+
+              console.log(`\nAxe testing: ${url}`);
+              const page = await context.newPage();
+              await page.goto(url, { waitUntil: 'networkidle' });
+
+              const results = await new AxeBuilder({ page }).analyze();
+
+              for (const violation of results.violations) {
+                for (const node of violation.nodes) {
+                  const selector = Array.isArray(node.target)
+                    ? node.target[node.target.length - 1]
+                    : node.target;
+
+                  // File pattern: axe__<ruleId>__<safe-url>__<safe-selector>.png
+                  const filename = [
+                    'screenshots',
+                    `axe__${safeSegment(violation.id)}__${safeSegment(url)}__${safeSegment(selector)}.png`,
+                  ].join('/');
+
+                  node.screenshotPath = filename;
+
+                  try {
+                    await highlightedViewport(page, selector, filename);
+                    console.log(`[screenshot] ${violation.id} > ${filename}`);
+                  } catch {
+                    // If element screenshot fails (due to animation, obscured element, etd),
+                    // fallback to full viewport screenshot to at least capture the issue in context.
+                    await page.screenshot({ path: filename });
+                    console.log(`[screenshot] ${violation.id} > ${filename} (fallback: viewport)`);
+                  }
+                }
+              }
+
+              allResults.push({ url, violations: results.violations, passes: results.passes });
+              const vCount = results.violations.length;
+              console.log(vCount > 0 ? `❌ ${vCount} violations` : '✅ No violations');
+
+              await page.close();
+            }
+
+            fs.writeFileSync('axe-results.json', JSON.stringify(allResults, null, 2));
+            console.log('\naxe-results.json written');
+            await browser.close();
+          })();
+          EOF
+
+          TEST_URLS="$(cat resolved-urls.txt)" node axe-test.js
+
+      - name: Run Lighthouse
+        run: |
+          mkdir -p lighthouse-reports
+          IFS=',' read -ra URL_ARRAY <<< "$(cat resolved-urls.txt)"
+
+          for url in "${URL_ARRAY[@]}"; do
+            url_trimmed=$(echo "$url" | xargs)
+            safe_name=$(echo "$url_trimmed" | sed 's/[^a-zA-Z0-9]/_/g')
+
+            echo "Lighthouse: $url_trimmed"
+
+            npx lighthouse "$url_trimmed" \
+              --only-categories=accessibility \
+              --chrome-flags="--headless" \
+              --output=json \
+              --output-path="lighthouse-reports/$safe_name.json"
+
+            score=$(node -e "
+              const r = require('./lighthouse-reports/$safe_name.json');
+              console.log(Math.round(r.categories.accessibility.score * 100));
+            ")
+
+            if   [ "$score" -ge 90 ]; then icon="🟢 Pass"
+            elif [ "$score" -ge 50 ]; then icon="🟡 Needs Improvement"
+            else                           icon="🔴 Critical Fail"
+            fi
+
+            echo "$icon — Score: $score / 100"
+            echo "----------------------------------"
+          done
+
+      - name: Create Pa11y config
+        run: |
+          cat > pa11y.json << 'EOF'
+          {
+            "chromeLaunchConfig": {
+              "args": ["--no-sandbox", "--disable-setuid-sandbox"]
+            }
+          }
+          EOF
+
+      - name: Run Pa11y
+        run: |
+          IFS=',' read -ra URL_ARRAY <<< "$(cat resolved-urls.txt)"
+          mkdir -p pa11y-raw
+          idx=0
+
+          for url in "${URL_ARRAY[@]}"; do
+            url_trimmed=$(echo "$url" | xargs)
+            echo "Pa11y: $url_trimmed"
+
+            pa11y "$url_trimmed" \
+              --standard WCAG2AA \
+              --reporter json \
+              --config ./pa11y.json \
+              > "pa11y-raw/${idx}.json" 2>/dev/null || true
+
+            node -e "
+              const fs = require('fs');
+              const file = process.argv[1];
+              let issues = [];
+              try {
+                const raw = fs.readFileSync(file, 'utf8').trim();
+                if (raw) issues = JSON.parse(raw);
+                if (!Array.isArray(issues)) issues = [];
+              } catch(e) {}
+              fs.writeFileSync(file, JSON.stringify(issues));
+            " "pa11y-raw/${idx}.json"
+
+            issue_count=$(node -e "
+              const fs = require('fs');
+              try { console.log(JSON.parse(fs.readFileSync(process.argv[1], 'utf8')).length); }
+              catch { console.log(0); }
+            " "pa11y-raw/${idx}.json")
+            echo "$issue_count issue(s) found"
+            echo "----------------------------------"
+
+            echo "$url_trimmed" > "pa11y-raw/${idx}.url"
+            idx=$((idx + 1))
+          done
+
+          node -e "
+            const fs = require('fs');
+            const dir = 'pa11y-raw';
+            const results = [];
+            const jsonFiles = fs.readdirSync(dir)
+              .filter(f => f.endsWith('.json'))
+              .sort((a, b) => parseInt(a) - parseInt(b));
+            for (const f of jsonFiles) {
+              const idx = f.replace('.json', '');
+              const urlFile = dir + '/' + idx + '.url';
+              const pageUrl = fs.existsSync(urlFile)
+                ? fs.readFileSync(urlFile, 'utf8').trim()
+                : 'unknown';
+              let issues = [];
+              try { issues = JSON.parse(fs.readFileSync(dir + '/' + f, 'utf8')); } catch {}
+              results.push({ pageUrl, issues });
+            }
+            fs.writeFileSync('pa11y-results.json', JSON.stringify(results, null, 2));
+            console.log('pa11y-results.json written (' + results.length + ' URL(s))');
+          "
+
+          cat << 'SSEOF' > pa11y-screenshots.js
+          const { chromium } = require('playwright');
+          const fs = require('fs');
+
+          function safeSegment(str) {
+            return String(str || '')
+              .replace(/[^a-zA-Z0-9.\-]/g, '_')
+              .replace(/_+/g, '_')
+              .replace(/^_|_$/g, '')
+              .slice(0, 80);
+          }
+
+          async function highlightedViewport(page, selector, filename) {
+            await page.locator(selector).first().scrollIntoViewIfNeeded();
+            await page.evaluate((sel) => {
+              const el = document.querySelector(sel);
+              if (!el) return;
+              el.dataset._a11yPrevOutline   = el.style.outline;
+              el.dataset._a11yPrevBoxShadow = el.style.boxShadow;
+              el.style.outline   = '3px solid red';
+              el.style.boxShadow = '0 0 0 3px rgba(255,0,0,0.3)';
+            }, selector);
+            await page.screenshot({ path: filename, animations: 'disabled' });
+            await page.evaluate((sel) => {
+              const el = document.querySelector(sel);
+              if (!el) return;
+              el.style.outline   = el.dataset._a11yPrevOutline   || '';
+              el.style.boxShadow = el.dataset._a11yPrevBoxShadow || '';
+              delete el.dataset._a11yPrevOutline;
+              delete el.dataset._a11yPrevBoxShadow;
+            }, selector);
+          }
+
+          (async () => {
+            const pa11yResults = JSON.parse(fs.readFileSync('pa11y-results.json', 'utf8'));
+            const browser = await chromium.launch();
+            const context = await browser.newContext({ ignoreHTTPSErrors: true });
+
+            fs.mkdirSync('screenshots', { recursive: true });
+
+            for (const result of pa11yResults) {
+              if (!result.issues || result.issues.length === 0) continue;
+
+              console.log(`\nScreenshotting Pa11y issues for: ${result.pageUrl}`);
+              const page = await context.newPage();
+              await page.goto(result.pageUrl, { waitUntil: 'networkidle' });
+
+              for (const issue of result.issues) {
+                // File pattern: pa11y__<issueCode>__<safe-url>__<safe-selector>.png
+                const filename = [
+                  'screenshots',
+                  `pa11y__${safeSegment(issue.code)}__${safeSegment(result.pageUrl)}__${safeSegment(issue.selector)}.png`,
+                ].join('/');
+
+                issue.screenshotPath = filename;
+
+                try {
+                  await highlightedViewport(page, issue.selector, filename);
+                  console.log(`[screenshot] ${issue.code} > ${filename}`);
+                } catch {
+                  await page.screenshot({ path: filename });
+                  console.log(`[screenshot] ${issue.code} > ${filename} (fallback: viewport)`);
+                }
+              }
+
+              await page.close();
+            }
+
+            fs.writeFileSync('pa11y-results.json', JSON.stringify(pa11yResults, null, 2));
+            console.log('\npa11y-results.json updated with screenshot paths');
+            await browser.close();
+          })();
+          SSEOF
+
+          node pa11y-screenshots.js
+
+      - name: Generate consolidated Markdown report
+        run: |
+          cat << 'SCRIPT' > generate-report.js
+          const fs = require('fs'), path = require('path');
+          function safeRead(f){try{return JSON.parse(fs.readFileSync(f,'utf8'));}catch{return null;}}
+          const axeRaw=safeRead('axe-results.json')||[], pa11yRaw=safeRead('pa11y-results.json')||[], lhDir='lighthouse-reports';
+          const allUrls=new Set([...axeRaw.map(r=>r.url),...pa11yRaw.map(r=>r.pageUrl)]);
+          function normalizeHtml(h){return(h||'').replace(/\s+/g,' ').trim().slice(0,200);}
+          function mdEscape(s){return String(s||'').replace(/</g,'\\<').replace(/>/g,'\\>').replace(/\|/g,'\\|');}
+          const findings=new Map();
+          const passes=new Map();
+          function upsert(ruleId,description,impact,helpUrl,source,html,target,url,screenshotPath){
+            const key=ruleId;
+            if(!findings.has(key))findings.set(key,{ruleId,description,impact,helpUrl,sources:new Set(),nodes:[]});
+            const f=findings.get(key); f.sources.add(source);
+            if(!f.nodes.some(n=>normalizeHtml(n.html)===normalizeHtml(html)))
+              f.nodes.push({html:html||'',target:target||'',url:url||'',screenshotPath:screenshotPath||null});
+          }
+          function upsertPass(ruleId,description,helpUrl,source){
+            if(!passes.has(ruleId))passes.set(ruleId,{ruleId,description,helpUrl,sources:new Set()});
+            passes.get(ruleId).sources.add(source);
+          }
+          for(const r of axeRaw){
+            for(const v of(r.violations||[]))for(const n of(v.nodes||[]))
+              upsert(v.id,v.help||v.description||'',v.impact||'unknown',v.helpUrl||'','axe',n.html,
+                Array.isArray(n.target)?n.target.join(', '):(n.target||''),r.url,n.screenshotPath||null);
+            for(const p of(r.passes||[]))
+              upsertPass(p.id,p.help||p.description||'',p.helpUrl||'','axe');
+          }
+          for(const r of pa11yRaw)for(const i of(r.issues||[]))
+            upsert(i.code,i.message||'',i.type==='error'?'serious':'minor','https://www.w3.org/TR/WCAG21/','pa11y',
+              i.context||'',i.selector||'',r.pageUrl,i.screenshotPath||null);
+          const impactOrder={critical:0,serious:1,moderate:2,minor:3,warning:4,unknown:5};
+          const allFindings=[...findings.values()].sort((a,b)=>(impactOrder[a.impact]??5)-(impactOrder[b.impact]??5));
+          const totalPasses=passes.size;
+          const lhScores={};
+          if(fs.existsSync(lhDir))for(const f of fs.readdirSync(lhDir)){
+            if(!f.endsWith('.json'))continue;
+            const lh=safeRead(path.join(lhDir,f)); if(!lh)continue;
+            lhScores[lh.finalUrl||lh.requestedUrl||f.replace('.json','')]=Math.round((lh.categories?.accessibility?.score??0)*100);
+          }
+          const sv=Object.values(lhScores), agg=sv.length?Math.round(sv.reduce((a,b)=>a+b,0)/sv.length):null;
+          const countByImpact={};
+          for(const f of allFindings)countByImpact[f.impact]=(countByImpact[f.impact]||0)+1;
+          const totalErrors=(countByImpact.critical||0)+(countByImpact.serious||0);
+          const totalWarnings=(countByImpact.moderate||0)+(countByImpact.minor||0)+(countByImpact.warning||0);
+          const EMOJI={critical:'🔴',serious:'🟠',moderate:'🟡',minor:'🟢',warning:'⚪',unknown:'⚫'};
+          function scoreLine(s){if(s===null)return'N/A';if(s>=90)return`${s}/100 🟢 Pass`;if(s>=50)return`${s}/100 🟡 Needs Improvement`;return`${s}/100 🔴 Critical Fail`;}
+          function fence(c){return'```\n'+String(c).replace(/`{3}/g,'\\`\\`\\`')+'\n```';}
+          const L=[];
+          L.push('# A11y Compliance Report','',
+            `> **Generated:** ${new Date().toUTCString()}  `,
+            `> **URLs audited:** ${allUrls.size}  `,
+            '> **Tools:** Axe-core · Pa11y · Lighthouse',
+            '','---','');
+          L.push('## Lighthouse Score');
+          L.push('',agg!==null?`**Overall (average):** ${scoreLine(agg)}`:'_No Lighthouse data found._','');
+          if(Object.keys(lhScores).length){
+            L.push('| URL | Score |','|-----|-------|');
+            for(const[u,s]of Object.entries(lhScores))L.push(`| ${u} | ${scoreLine(s)} |`);
+            L.push('');
+          }
+          L.push('> [Chrome Developer Scoring Documentation (Lighthouse)](https://developer.chrome.com/docs/lighthouse/accessibility/scoring)','','---','');
+          L.push('## Summary','',
+            '| Metric | Count |','|--------|-------|',
+            `| 🔴 Errors (critical + serious) | **${totalErrors}** |`,
+            `| 🟡 Warnings (moderate + minor) | **${totalWarnings}** |`,
+            `| ✅ Passes (axe-core, deduplicated) | **${totalPasses}** |`,
+            `| 🔵 Unique violations (deduplicated) | **${allFindings.length}** |`,
+            '','---','');
+          L.push('> **Screenshots:** Viewport screenshots with the violating element highlighted in red are in the `a11y-screenshots` artifact.',
+            '>',
+            '> Filenames follow the pattern: `<tool>__<ruleId>__<url>__<selector>.png`',
+            '','---','');
+          L.push('## Findings');
+          if(allFindings.length===0){
+            L.push('','✅ **No violations found across all tools.**','');
+          } else {
+            for(const f of allFindings){
+              L.push('<details>');
+              L.push(`<summary><strong>${EMOJI[f.impact]||'⚫'} <code>${f.ruleId}</code></strong> <em>(${f.impact})</em></summary>`,'');
+              L.push('| Field | Value |','|-------|-------|',
+                `| **Impact** | ${f.impact} |`,
+                `| **Source(s)** | ${[...f.sources].join(', ')} |`,
+                `| **Description** | ${mdEscape(f.description)} |`);
+              if(f.helpUrl)L.push(`| **Reference** | [More info](${f.helpUrl}) |`);
+              L.push('',`**Affected elements** (${f.nodes.length}):`);
+              for(const[i,n]of f.nodes.entries()){
+                L.push('');
+                if(n.url)    L.push(`_URL:_ ${n.url}`,'');
+                if(n.target) L.push(`_Target ${i+1}:_ \`${n.target}\``);
+                if(n.html)   L.push(fence(n.html));
+                if(n.screenshotPath)
+                  L.push('',`Screenshot: \`${path.basename(n.screenshotPath)}\``);
+              }
+              L.push('','</details>','');
+            }
+          }
+          fs.mkdirSync('a11y-report',{recursive:true});
+          fs.writeFileSync('a11y-report/report.md',L.join('\n'),'utf8');
+          console.log('✅ Report written - a11y-report/report.md');
+          console.log(`   Unique violations : ${allFindings.length}`);
+          console.log(`   Errors            : ${totalErrors}`);
+          console.log(`   Warnings          : ${totalWarnings}`);
+          console.log(`   Passes            : ${totalPasses}`);
+          if(agg!==null)console.log(`   Lighthouse Score  : ${scoreLine(agg)}`);
+          SCRIPT
+
+          node generate-report.js
+
+      - name: Upload A11y Report
+        uses: actions/upload-artifact@v6
+        with:
+          name: a11y-compliance-report
+          path: a11y-report/report.md
+
+      - name: Upload Screenshots
+        uses: actions/upload-artifact@v6
+        with:
+          name: a11y-screenshots
+          path: screenshots/
+
+      - name: Create GitHub Issue
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+
+            const LIMIT       = 65536;
+            const REPORT_FILE = 'a11y-report/report.md';
+            const BASE_URL    = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}`;
+            const RUN_URL     = `${BASE_URL}/actions/runs/${context.runId}`;
+            const URLS        = fs.readFileSync('resolved-urls.txt', 'utf8').trim();
+            const DATE        = new Date().toUTCString();
+
+            const { data: { artifacts } } = await github.rest.actions.listWorkflowRunArtifacts({
+              owner:  context.repo.owner,
+              repo:   context.repo.repo,
+              run_id: context.runId,
+            });
+
+            const artifactUrl = (name) => {
+              const match = artifacts.find(a => a.name === name);
+              return match
+                ? `${BASE_URL}/actions/runs/${context.runId}/artifacts/${match.id}`
+                : RUN_URL;
+            };
+
+            const reportUrl      = artifactUrl('a11y-compliance-report');
+            const screenshotsUrl = artifactUrl('a11y-screenshots');
+
+            let body = fs.readFileSync(REPORT_FILE, 'utf8');
+
+            body = body.replace(
+              '`a11y-screenshots` artifact',
+              `[\`a11y-screenshots\`](${screenshotsUrl}) artifact`
+            );
+
+            body += [
+              '',
+              '---',
+              '',
+              `> **Workflow run:** [View on GitHub Actions](${RUN_URL})`,
+            ].join('\n');
+
+            // Just show the summary with direct artifact links
+            // if the GH issue body limit is exceeded (65,536 characters).
+            if (body.length > LIMIT) {
+              const summaryStart = body.indexOf('## Summary');
+              const summaryEnd   = body.indexOf('\n---', summaryStart);
+              const summary      = summaryStart !== -1
+                ? body.slice(summaryStart, summaryEnd !== -1 ? summaryEnd : summaryStart + 2000)
+                : '_Summary not available._';
+
+              body = [
+                '# A11y Compliance Report',
+                '',
+                `> **Generated:** ${DATE}  `,
+                `> **URLs audited:** ${URLS.split(',').length}  `,
+                '',
+                '> ⚠️ The full report exceeds GitHub\'s issue body limit.',
+                '> Download the artifacts directly:',
+                `> - [Full report](${reportUrl})`,
+                `> - [Element screenshots](${screenshotsUrl})`,
+                '',
+                '---',
+                '',
+                summary,
+                '',
+                '---',
+                '',
+                '_Full findings and element screenshots are available in the artifacts linked above._',
+                '',
+                `> **Workflow run:** [View on GitHub Actions](${RUN_URL})`,
+              ].join('\n');
+            }
+
+            await github.rest.issues.create({
+              owner:  context.repo.owner,
+              repo:   context.repo.repo,
+              title:  `A11y Audit - ${DATE}`,
+              body,
+              labels: ['accessibility'],
+            });

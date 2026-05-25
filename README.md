@@ -27,6 +27,31 @@ ax-review is a GitHub Action that:
 6. Posts results as Check Runs (recommended) or PR comments
 7. Optionally fails the workflow on violations
 
+### URL Audit Mode
+
+In addition to pull request accessibility reviews, ax-review also supports full rendered-page accessibility auditing through a companion GitHub Actions workflow.
+
+The URL audit workflow uses:
+
+- **Axe-core + Playwright** for browser-rendered WCAG violations
+- **Lighthouse** for accessibility scoring and audits
+- **Pa11y** for additional WCAG2AA validation
+
+It supports scanning:
+
+- Direct URLs
+- CSV files containing URLs
+- sitemap.xml files (including nested sitemaps)
+
+The workflow generates:
+
+- Consolidated Markdown accessibility reports
+- Highlighted element screenshots
+- GitHub Actions artifacts
+- Optional GitHub issue creation for tracking
+
+This complements PR diff analysis by validating the fully rendered deployed experience after deployment.
+
 ## How It Works
 
 ```
@@ -145,7 +170,7 @@ Add your API key to repository secrets:
 
 ### 2. Create Workflow
 
-Create `.github/workflows/a11y-review.yml`:
+Create `.github/workflows/a11y-review.yml` for a minimal code review worfklow with Gemini (Checkout [Usage Examples](#usage-examples) for full platform (Code Review + URL Audit) workflow and other variations):
 
 ```yaml
 name: Accessibility Review
@@ -279,18 +304,104 @@ If you're running your own Ollama server:
 
 ## Usage Examples
 
-The `examples/` directory contains ready-to-use workflow configurations:
+The `examples/` directory contains ready-to-use workflow configurations for both PR-based AI review and rendered-page URL auditing.
+
+### Core Examples:
 
 | File | Use Case |
 |------|----------|
-| [`examples/minimal-gemini.yml`](examples/minimal-gemini.yml) | Quick start with Gemini defaults |
-| [`examples/minimal-ollama.yml`](examples/minimal-ollama.yml) | Quick start with Ollama Cloud |
-| [`examples/production-checks.yml`](examples/production-checks.yml) | Check Runs (recommended for production) |
-| [`examples/production-comments.yml`](examples/production-comments.yml) | PR Comments (alternative for direct feedback) |
-| [`examples/comprehensive.yml`](examples/comprehensive.yml) | All configuration options documented |
-| [`examples/large-repo.yml`](examples/large-repo.yml) | Optimized for large PRs (200+ files) |
-| [`examples/monorepo.yml`](examples/monorepo.yml) | Monorepo setups with multiple apps |
-| [`examples/self-hosted-ollama.yml`](examples/self-hosted-ollama.yml) | Self-hosted Ollama server |
+|[`examples/a11y-review.yml`](examples/a11y-review.yml) | Unified workflow combining PR review + URL audit |
+|[`examples/a11y-code-review.yml`](examples/a11y-code-review.yml) | Standalone PR-based accessibility review |
+|[`examples/a11y-url-audit.yml`](examples/a11y-url-audit.yml) | Standalone rendered-page accessibility URL audit |
+
+### Alternative variations:
+
+| File | Use Case |
+|------|----------|
+| [`examples/variations/minimal-gemini.yml`](examples/variations/minimal-gemini.yml) | Quick start with Gemini defaults |
+| [`examples/variations/minimal-ollama.yml`](examples/variations/minimal-ollama.yml) | Quick start with Ollama Cloud |
+| [`examples/variations/production-checks.yml`](examples/variations/production-checks.yml) | Check Runs (recommended for production) |
+| [`examples/variations/production-comments.yml`](examples/variations/production-comments.yml) | PR Comments (alternative for direct feedback) |
+| [`examples/variations/comprehensive.yml`](examples/variations/comprehensive.yml) | All configuration options documented |
+| [`examples/variations/large-repo.yml`](examples/variations/large-repo.yml) | Optimized for large PRs (200+ files) |
+| [`examples/variations/monorepo.yml`](examples/variations/monorepo.yml) | Monorepo setups with multiple apps |
+| [`examples/variations/self-hosted-ollama.yml`](examples/variations/self-hosted-ollama.yml) | Self-hosted Ollama server |
+| [`examples/variations/a11y-url-audit.yml`](examples/variations/a11y-url-audit.yml) | Standalone rendered-page accessibility URL audit |
+| [`examples/variations/a11y-review.yml`](examples/variations/a11y-platform.yml) | Unified workflow combining PR review + URL audit |
+
+### Unified Platform Workflow (Recommended)
+
+This single workflow supports both:
+
+- **Code Review Mode**: Automatically reviews pull requests
+- **URL Audit Mode**: Manually audits deployed URLs, CSVs, or sitemap.xml files
+
+```yaml
+name: Accessibility Review 
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+  workflow_dispatch:
+    inputs:
+      input-type:
+        description: "Input type: urls | csv | sitemap"
+        required: true
+        default: "urls"
+        type: choice
+        options:
+          - urls
+          - csv
+          - sitemap
+
+      urls:
+        description: "URLs, CSV path, or sitemap URL(s)"
+        required: true
+        default: "https://example.com"
+
+jobs:
+  code-review:
+    if: github.event_name == 'pull_request'
+
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      pull-requests: write
+      checks: write
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Gitleaks
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz | tar -xz
+          sudo mv gitleaks /usr/local/bin/gitleaks
+
+      - name: Run Accessibility Review
+        uses: rtCamp/ax-review@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          llm-provider: ollama
+          model: gpt-oss:120b-cloud
+          api-key: ${{ secrets.OLLAMA_API_KEY }}
+          output-mode: checks
+          fail-on-issues: true
+
+  url-audit:
+    if: github.event_name == 'workflow_dispatch'
+
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      # URL audit workflow steps
+      # See examples/a11y-url-audit.yml
+```
 
 ### Minimal Setup (Gemini)
 
@@ -304,18 +415,21 @@ on:
 jobs:
   a11y-review:
     runs-on: ubuntu-latest
+
     permissions:
       contents: read
       pull-requests: write
       checks: write
-    
+
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+
       - name: Install Gitleaks
         run: |
-          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz | tar -xz
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz | tar -xz
           sudo mv gitleaks /usr/local/bin/gitleaks
-      - uses: your-org/ax-review@v1
+
+      - uses: rtCamp/ax-review@v1.0.3
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           llm-provider: gemini
@@ -327,7 +441,7 @@ jobs:
 Check Runs provide cleaner UI integration and work with branch protection rules:
 
 ```yaml
-- uses: your-org/ax-review@v1
+- uses: rtCamp/ax-review@v1.0.3
   with:
     github-token: ${{ secrets.GITHUB_TOKEN }}
     llm-provider: gemini
@@ -344,7 +458,7 @@ Check Runs provide cleaner UI integration and work with branch protection rules:
 For repos with many files per PR:
 
 ```yaml
-- uses: your-org/ax-review@v1
+- uses: rtCamp/ax-review@v1.0.3
   with:
     github-token: ${{ secrets.GITHUB_TOKEN }}
     llm-provider: gemini
@@ -352,6 +466,61 @@ For repos with many files per PR:
     max-files: 200      # Higher limit
     batch-size: 30      # Larger batches
 ```
+
+### Standalone URL Audit Workflow
+
+Use this workflow when you want to audit rendered pages after deployment.
+
+Supports:
+- Direct URL input
+- CSV files committed to the repository
+- sitemap.xml crawling (including nested sitemaps)
+
+```yaml
+name: Accessibility URL Audit
+
+on:
+  workflow_dispatch:
+    inputs:
+      input-type:
+        description: "Input type: urls | csv | sitemap"
+        required: true
+        default: "urls"
+        type: choice
+        options:
+          - urls
+          - csv
+          - sitemap
+
+      urls:
+        description: "URLs, CSV path, or sitemap URL(s)"
+        required: true
+        default: "https://example.com"
+
+jobs:
+  a11y:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      # Axe-core + Playwright
+      # Lighthouse
+      # Pa11y
+      # Markdown report generation
+      # Screenshot artifacts
+      # GitHub issue creation
+```
+
+### URL Audit Input Examples
+
+| Input Type | Input |
+|------------|---------|
+| URLs (`urls`) | `https://example.com,https://example.com/about` |
+| CSV File (`csv`) | `.github/a11y-urls.csv` (with `url`/`urls` column in case of mutli column file) |
+| Sitemap (`sitemap`) | `https://example.com/sitemap.xml` (automatically resolves nested sitemaps) |
 
 ## Output Modes
 

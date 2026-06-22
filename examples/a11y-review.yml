@@ -72,7 +72,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
-          node-version: 'lts/*'
+          node-version: '22'
 
       - name: Resolve URLs
         run: |
@@ -219,9 +219,9 @@ jobs:
             await page.evaluate((sel) => {
               const el = document.querySelector(sel);
               if (!el) return;
-              el.dataset._a11yPrevOutline    = el.style.outline;
-              el.dataset._a11yPrevBoxShadow  = el.style.boxShadow;
-              el.style.outline   = '3px solid red';
+              el.dataset._a11yPrevOutline = el.style.outline;
+              el.dataset._a11yPrevBoxShadow = el.style.boxShadow;
+              el.style.outline = '3px solid red';
               el.style.boxShadow = '0 0 0 3px rgba(255,0,0,0.3)';
             }, selector);
 
@@ -230,7 +230,7 @@ jobs:
             await page.evaluate((sel) => {
               const el = document.querySelector(sel);
               if (!el) return;
-              el.style.outline   = el.dataset._a11yPrevOutline   || '';
+              el.style.outline = el.dataset._a11yPrevOutline || '';
               el.style.boxShadow = el.dataset._a11yPrevBoxShadow || '';
               delete el.dataset._a11yPrevOutline;
               delete el.dataset._a11yPrevBoxShadow;
@@ -241,7 +241,9 @@ jobs:
             const browser = await chromium.launch();
             const context = await browser.newContext({ ignoreHTTPSErrors: true });
             const urls = process.env.TEST_URLS.split(',');
+
             const allResults = [];
+            const timedOutUrls = [];
 
             fs.mkdirSync('screenshots', { recursive: true });
 
@@ -251,41 +253,53 @@ jobs:
 
               console.log(`\nAxe testing: ${url}`);
               const page = await context.newPage();
-              await page.goto(url, { waitUntil: 'networkidle' });
 
-              const results = await new AxeBuilder({ page }).analyze();
+              try {
+                await page.goto(url, { waitUntil: 'load', timeout: 30000 });
 
-              for (const violation of results.violations) {
-                for (const node of violation.nodes) {
-                  const selector = Array.isArray(node.target)
-                    ? node.target[node.target.length - 1]
-                    : node.target;
+                const results = await new AxeBuilder({ page }).analyze();
 
-                  // File pattern: axe__<ruleId>__<safe-url>__<safe-selector>.png
-                  const filename = [
-                    'screenshots',
-                    `axe__${safeSegment(violation.id)}__${safeSegment(url)}__${safeSegment(selector)}.png`,
-                  ].join('/');
+                for (const violation of results.violations) {
+                  for (const [nodeIndex, node] of violation.nodes.entries()) {
+                    const selector = Array.isArray(node.target)
+                      ? node.target[node.target.length - 1]
+                      : node.target;
 
-                  node.screenshotPath = filename;
+                    // File pattern: axe__<ruleId>__<safe-url>__<node-index>__<safe-selector>.png
+                    const filename = [
+                      'screenshots',
+                      `axe__${safeSegment(violation.id)}__${safeSegment(url)}__node-${nodeIndex + 1}__${safeSegment(selector)}.png`,
+                    ].join('/');
 
-                  try {
-                    await highlightedViewport(page, selector, filename);
-                    console.log(`[screenshot] ${violation.id} > ${filename}`);
-                  } catch {
-                    // If element screenshot fails (due to animation, obscured element, etd),
-                    // fallback to full viewport screenshot to at least capture the issue in context.
-                    await page.screenshot({ path: filename });
-                    console.log(`[screenshot] ${violation.id} > ${filename} (fallback: viewport)`);
+                    node.screenshotPath = filename;
+
+                    try {
+                      await highlightedViewport(page, selector, filename);
+                      console.log(`[screenshot] ${violation.id} > ${filename}`);
+                    } catch {
+                      // If element screenshot fails (due to animation, obscured element, etd),
+                      // fallback to full viewport screenshot to at least capture the issue in context.
+                      await page.screenshot({ path: filename });
+                      console.log(`[screenshot] ${violation.id} > ${filename} (fallback: viewport)`);
+                    }
                   }
                 }
+
+                allResults.push({ url, violations: results.violations, passes: results.passes, skipped: false });
+                const vCount = results.violations.length;
+                console.log(vCount > 0 ? `❌ ${vCount} violations` : '✅ No violations');
+              } catch (error) {
+                console.log(`⚠️ Skipped ${url}: ${error.message}`);
+                timedOutUrls.push({ url, error: error.message });
+                allResults.push({ url, violations: [], passes: [], error: error.message, skipped: true });
+              } finally {
+                await page.close();
               }
+            }
 
-              allResults.push({ url, violations: results.violations, passes: results.passes });
-              const vCount = results.violations.length;
-              console.log(vCount > 0 ? `❌ ${vCount} violations` : '✅ No violations');
-
-              await page.close();
+            if (timedOutUrls.length > 0) {
+              console.log(`\n⚠️ ${timedOutUrls.length} URL(s) skipped due to errors:`);
+              timedOutUrls.forEach(t => console.log(` - ${t.url}: ${t.error}`));
             }
 
             fs.writeFileSync('axe-results.json', JSON.stringify(allResults, null, 2));
@@ -435,6 +449,7 @@ jobs:
             const pa11yResults = JSON.parse(fs.readFileSync('pa11y-results.json', 'utf8'));
             const browser = await chromium.launch();
             const context = await browser.newContext({ ignoreHTTPSErrors: true });
+            const screenshotFailures = [];
 
             fs.mkdirSync('screenshots', { recursive: true });
 
@@ -443,27 +458,40 @@ jobs:
 
               console.log(`\nScreenshotting Pa11y issues for: ${result.pageUrl}`);
               const page = await context.newPage();
-              await page.goto(result.pageUrl, { waitUntil: 'networkidle' });
 
-              for (const issue of result.issues) {
-                // File pattern: pa11y__<issueCode>__<safe-url>__<safe-selector>.png
-                const filename = [
-                  'screenshots',
-                  `pa11y__${safeSegment(issue.code)}__${safeSegment(result.pageUrl)}__${safeSegment(issue.selector)}.png`,
-                ].join('/');
+              try {
+                await page.goto(url, { waitUntil: 'load', timeout: 30000 });
 
-                issue.screenshotPath = filename;
+                for (const [nodeIndex, issue] of result.issues.entries()) {
+                  // File pattern: pa11y__<issueCode>__<safe-url>__<node-index>__<safe-selector>.png
+                  const filename = [
+                    'screenshots',
+                    `pa11y__${safeSegment(issue.code)}__${safeSegment(result.pageUrl)}__node-${nodeIndex + 1}__${safeSegment(issue.selector)}.png`,
+                  ].join('/');
 
-                try {
-                  await highlightedViewport(page, issue.selector, filename);
-                  console.log(`[screenshot] ${issue.code} > ${filename}`);
-                } catch {
-                  await page.screenshot({ path: filename });
-                  console.log(`[screenshot] ${issue.code} > ${filename} (fallback: viewport)`);
+                  issue.screenshotPath = filename;
+
+                  try {
+                    await highlightedViewport(page, issue.selector, filename);
+                    console.log(`[screenshot] ${issue.code} > ${filename}`);
+                  } catch {
+                    await page.screenshot({ path: filename });
+                    console.log(`[screenshot] ${issue.code} > ${filename} (fallback: viewport)`);
+                  }
                 }
+              } catch (error) {
+                console.log(`⚠️ Skipped screenshots for ${result.pageUrl}: ${error.message}`);
+                screenshotFailures.push({ url: result.pageUrl, error: error.message });
+                result.screenshotSkipped = true;
+                result.screenshotError = error.message;
+              } finally {
+                await page.close();
               }
+            }
 
-              await page.close();
+            if (screenshotFailures.length > 0) {
+              console.log(`\n⚠️  ${screenshotFailures.length} page(s) skipped for screenshots:`);
+              screenshotFailures.forEach(f => console.log(` - ${f.url}: ${f.error}`));
             }
 
             fs.writeFileSync('pa11y-results.json', JSON.stringify(pa11yResults, null, 2));
@@ -481,6 +509,8 @@ jobs:
           function safeRead(f){try{return JSON.parse(fs.readFileSync(f,'utf8'));}catch{return null;}}
           const axeRaw=safeRead('axe-results.json')||[], pa11yRaw=safeRead('pa11y-results.json')||[], lhDir='lighthouse-reports';
           const allUrls=new Set([...axeRaw.map(r=>r.url),...pa11yRaw.map(r=>r.pageUrl)]);
+          const skippedPages = axeRaw.filter(r=>r.skipped).map(r=>({url:r.url,error:r.error}));
+          const screenshotFailures = pa11yRaw.filter(r=>r.screenshotSkipped).map(r=>({url:r.pageUrl,error:r.screenshotError}));
           function normalizeHtml(h){return(h||'').replace(/\s+/g,' ').trim().slice(0,200);}
           function mdEscape(s){return String(s||'').replace(/</g,'\\<').replace(/>/g,'\\>').replace(/\|/g,'\\|');}
           const findings=new Map();
@@ -544,9 +574,29 @@ jobs:
             `| ✅ Passes (axe-core, deduplicated) | **${totalPasses}** |`,
             `| 🔵 Unique violations (deduplicated) | **${allFindings.length}** |`,
             '','---','');
+          if(skippedPages.length>0||screenshotFailures.length>0){
+            L.push('## ⚠️ Scan Warnings','');
+            if(skippedPages.length>0){
+              L.push('### Pages Not Scanned','',
+                '_These pages could not be loaded during the Axe-core scan. Their accessibility was not evaluated._',
+                '');
+              for(const s of skippedPages)
+                L.push(`- **${s.url}** — ${mdEscape(s.error)}`);
+              L.push('');
+            }
+            if(screenshotFailures.length>0){
+              L.push('### Screenshots Unavailable','',
+                '_These pages were scanned successfully by Pa11y but could not be loaded again for screenshots._',
+                '');
+              for(const s of screenshotFailures)
+                L.push(`- **${s.url}** — ${mdEscape(s.error)}`);
+              L.push('');
+            }
+            L.push('---','');
+          }
           L.push('> **Screenshots:** Viewport screenshots with the violating element highlighted in red are in the `a11y-screenshots` artifact.',
             '>',
-            '> Filenames follow the pattern: `<tool>__<ruleId>__<url>__<selector>.png`',
+            '> Filenames follow the pattern: `<tool>__<ruleId>__<url>__<node-index>__<selector>.png`',
             '','---','');
           L.push('## Findings');
           if(allFindings.length===0){

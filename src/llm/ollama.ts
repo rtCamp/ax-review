@@ -7,6 +7,7 @@
 import { Ollama } from 'ollama';
 import { LLMError, type AnalysisResult } from './types';
 import { LLM_LIMITS } from '../constants';
+import { recordLLMUsage } from '../utils/llm-usage';
 
 /**
  * Default model for Ollama Cloud.
@@ -57,7 +58,7 @@ export class OllamaClient {
 
   constructor(config: { apiKey: string; model?: string; baseUrl?: string }) {
     this.model = config.model ?? DEFAULT_MODEL;
-    
+
     this.ollama = new Ollama({
       host: (config.baseUrl ?? OLLAMA_CLOUD_URL).replace(/\/$/, ''),
       headers: {
@@ -81,8 +82,15 @@ export class OllamaClient {
         },
       });
 
+      recordLLMUsage(
+        this.provider,
+        this.model,
+        response.prompt_eval_count ?? 0,
+        response.eval_count ?? 0
+      )
+
       const content = response.message?.content;
-      
+
       if (!content) {
         throw new LLMError('Ollama returned empty response', undefined, false);
       }
@@ -97,9 +105,9 @@ export class OllamaClient {
     // Strip markdown code blocks if present
     let cleanContent = content.trim();
     if (cleanContent.startsWith('```json')) {
-      cleanContent = cleanContent.replace(/^```json\s*/i, '').replace(/\s*```$/,'');
+      cleanContent = cleanContent.replace(/^```json\s*/i, '').replace(/\s*```$/, '');
     } else if (cleanContent.startsWith('```')) {
-      cleanContent = cleanContent.replace(/^```\s*/i, '').replace(/\s*```$/,'');
+      cleanContent = cleanContent.replace(/^```\s*/i, '').replace(/\s*```$/, '');
     }
 
     try {
@@ -145,9 +153,9 @@ export class OllamaClient {
     if (typeof data !== 'object' || data === null) {
       throw new LLMError('Response is not an object', undefined, false);
     }
-    
+
     const response = data as RawResponse;
-    
+
     if (!Array.isArray(response.issues)) {
       throw new LLMError('Response missing issues array', undefined, false);
     }

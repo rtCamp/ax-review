@@ -98,7 +98,7 @@ export class GitHubClient {
 
           // Validate file status
           const status = validateFileStatus(file.status);
-          
+
           files.push({
             filename: file.filename,
             patch: file.patch,
@@ -149,6 +149,50 @@ export class GitHubClient {
   }
 
   /**
+   * Create a standalone PR comment.
+   */
+  async createIssueComment(prNumber: number, body: string): Promise<number> {
+    const { data: comment } = await this.octokit.rest.issues.createComment({
+      owner: this.owner,
+      repo: this.repo,
+      issue_number: prNumber,
+      body,
+    });
+
+    core.info(`Created summary comment ${comment.id}`);
+    return comment.id;
+  }
+
+  /**
+   * Update an existing standalone comment in place.
+   */
+  async updateIssueComment(commentId: number, body: string): Promise<void> {
+    await this.octokit.rest.issues.updateComment({
+      owner: this.owner,
+      repo: this.repo,
+      comment_id: commentId,
+      body,
+    });
+
+    core.info(`Updated summary comment ${commentId}`);
+  }
+
+  /**
+   * Find the existing ax-review summary comment on a PR.
+   */
+  async findSummaryComment(prNumber: number): Promise<{ id: number; body: string } | null> {
+    const { data: comments } = await this.octokit.rest.issues.listComments({
+      owner: this.owner,
+      repo: this.repo,
+      issue_number: prNumber,
+      per_page: 100,
+    });
+
+    const found = comments.find(c => c.body?.includes('<!-- ax-review-summary -->'));
+    return found ? { id: found.id, body: found.body ?? '' } : null;
+  }
+
+  /**
    * Create a Check Run with annotations.
    */
   async createCheckRun(
@@ -159,7 +203,7 @@ export class GitHubClient {
     annotations: CheckAnnotation[]
   ): Promise<number> {
     const conclusion = violations > 0 ? 'failure' : 'success';
-    const title = violations > 0 
+    const title = violations > 0
       ? `Accessibility Review: ${violations} violations, ${goodPractices} suggestions`
       : `Accessibility Review: Passed with ${goodPractices} suggestions`;
 
@@ -188,7 +232,7 @@ export class GitHubClient {
   buildLineToPositionMap(patch: string): Map<number, number> {
     const map = new Map<number, number>();
     const lines = patch.split('\n');
-    
+
     let position = 0;
     let newFileLine = 0;
 

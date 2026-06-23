@@ -26,6 +26,7 @@ import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from '@google/ge
 import { LLMError, type AnalysisResult, type GeminiConfig } from './types';
 import { BaseLLMClient } from './base';
 import { LLM_LIMITS } from '../constants';
+import { recordLLMUsage } from '../utils/llm-usage';
 
 /**
  * Default Gemini model.
@@ -96,15 +97,15 @@ export class GeminiClient extends BaseLLMClient {
    */
   constructor(config: GeminiConfig) {
     super();
-    
+
     if (!config.apiKey) {
       throw new Error('[Gemini] API key is required. Please set the api-key input or GEMINI_API_KEY environment variable.');
     }
-    
+
     if (config.apiKey.length < 10) {
       throw new Error(`[Gemini] API key appears to be invalid (too short: ${config.apiKey.length} characters). Expected a longer key from Google AI Studio.`);
     }
-    
+
     this.apiKey = config.apiKey;
     this.client = new GoogleGenerativeAI(config.apiKey);
     this.model = config.model ?? DEFAULT_MODEL;
@@ -160,7 +161,18 @@ export class GeminiClient extends BaseLLMClient {
           return model.generateContent(userPrompt);
         },
         // Extract text from Gemini response
-        (result) => result.response.text(),
+        (result) => {
+          const usage = result.response.usageMetadata;
+
+          recordLLMUsage(
+            this.provider,
+            this.model,
+            usage?.promptTokenCount ?? 0,
+            usage?.candidatesTokenCount ?? 0
+          );
+
+          return result.response.text();
+        },
         // Determine if error should trigger retry
         (error) => this.isRateLimitError(error),
         // Provider name for error messages
@@ -170,7 +182,7 @@ export class GeminiClient extends BaseLLMClient {
       // Enhance error message with troubleshooting guidance
       const originalMessage = error instanceof Error ? error.message : String(error);
       const enhancedMessage = this.enhanceErrorMessage(originalMessage);
-      
+
       // Re-throw with enhanced message
       if (error instanceof LLMError) {
         throw new LLMError(enhancedMessage, error.originalError, error.isRetryable);
@@ -185,7 +197,7 @@ export class GeminiClient extends BaseLLMClient {
    */
   private enhanceErrorMessage(originalMessage: string): string {
     const lower = originalMessage.toLowerCase();
-    
+
     if (lower.includes('api_key') || lower.includes('api key') || lower.includes('401') || lower.includes('403')) {
       return `${originalMessage}\n\nTroubleshooting:\n` +
         `1. Check that GEMINI_API_KEY is set correctly in your repository secrets\n` +
@@ -193,7 +205,7 @@ export class GeminiClient extends BaseLLMClient {
         `3. Ensure the key has not expired or been revoked\n` +
         `4. Try generating a new API key if the issue persists`;
     }
-    
+
     if (lower.includes('model') || lower.includes('not found') || lower.includes('404')) {
       return `${originalMessage}\n\nTroubleshooting:\n` +
         `1. Model '${this.model}' may not be available\n` +
@@ -201,7 +213,7 @@ export class GeminiClient extends BaseLLMClient {
         `3. Check https://ai.google.dev/models for current model names\n` +
         `4. Update the 'model' input in your workflow`;
     }
-    
+
     if (lower.includes('quota') || lower.includes('rate') || lower.includes('429')) {
       return `${originalMessage}\n\nTroubleshooting:\n` +
         `1. You've exceeded the Gemini API rate limit or quota\n` +
@@ -209,7 +221,7 @@ export class GeminiClient extends BaseLLMClient {
         `3. Wait a few minutes and retry\n` +
         `4. Consider upgrading to a paid tier at https://ai.google.dev/pricing`;
     }
-    
+
     if (lower.includes('timeout') || lower.includes('etimedout') || lower.includes('etimedout')) {
       return `${originalMessage}\n\nTroubleshooting:\n` +
         `1. The request took longer than the ${this.timeout}ms timeout\n` +
@@ -217,7 +229,7 @@ export class GeminiClient extends BaseLLMClient {
         `3. Reduce 'batch-size' to process fewer files per request\n` +
         `4. Gemini may be experiencing high load - retry later`;
     }
-    
+
     if (lower.includes('fetch') || lower.includes('network') || lower.includes('econn') || lower.includes('enotfound')) {
       return `${originalMessage}\n\nTroubleshooting:\n` +
         `1. Check your internet connection\n` +
@@ -225,7 +237,7 @@ export class GeminiClient extends BaseLLMClient {
         `3. Check if a firewall or proxy is blocking the request\n` +
         `4. The action runner may have network restrictions`;
     }
-    
+
     if (lower.includes('safety') || lower.includes('blocked') || lower.includes('content')) {
       return `${originalMessage}\n\nTroubleshooting:\n` +
         `1. Gemini's safety filters blocked the request\n` +
@@ -233,7 +245,7 @@ export class GeminiClient extends BaseLLMClient {
         `3. Try simplifying the diff or removing sensitive files\n` +
         `4. All safety filters are disabled in the request - this should not happen`;
     }
-    
+
     // Generic enhancement with full error context
     return `${originalMessage}\n\nTroubleshooting:\n` +
       `1. Provider: Gemini\n` +
@@ -273,7 +285,7 @@ export class GeminiClient extends BaseLLMClient {
       // Log the actual error for debugging
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error(`[Gemini] Configuration validation failed: ${errorMessage}`);
-      
+
       // Log additional details for common issues
       if (errorMessage.includes('API_KEY') || errorMessage.includes('api key')) {
         console.error('[Gemini] API key appears to be invalid or missing');
@@ -284,7 +296,7 @@ export class GeminiClient extends BaseLLMClient {
       } else if (errorMessage.includes('quota') || errorMessage.includes('rate') || errorMessage.includes('429')) {
         console.error('[Gemini] Rate limit or quota exceeded');
       }
-      
+
       return false;
     }
   }

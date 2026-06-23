@@ -25,6 +25,7 @@ import { getSystemPrompt, buildUserPrompt } from './prompts/a11y-prompt';
 import { createBatches } from './utils/batching';
 import { fetchPRFiles, filterWebFiles, shouldSkipFile } from './github/pr';
 import { countElementsInFiles, verifyCompleteness } from './utils/element-counter';
+import { logLLMUsage } from './utils/llm-usage';
 
 /**
  * Result from batch processing.
@@ -38,16 +39,16 @@ import { countElementsInFiles, verifyCompleteness } from './utils/element-counte
 export interface AnalysisResult {
   /** All accessibility issues found across all successful batches */
   issues: A11yIssue[];
-  
+
   /** Batches that failed to process */
   failedBatches: FailedBatch[];
-  
+
   /** Total number of batches */
   totalBatches: number;
-  
+
   /** Number of successfully processed batches */
   successfulBatches: number;
-  
+
   /** Potential gaps detected during verification */
   verificationGaps?: string[];
 }
@@ -59,10 +60,10 @@ export interface AnalysisResult {
 export interface FailedBatch {
   /** Zero-based index of the failed batch */
   batchIndex: number;
-  
+
   /** Files that were in this batch */
   files: string[];
-  
+
   /** Error message explaining the failure */
   error: string;
 }
@@ -74,22 +75,22 @@ export interface FailedBatch {
 export interface AnalysisContext {
   /** GitHub API client */
   github: GitHubClient;
-  
+
   /** LLM client for analysis */
   llm: LLMClient;
-  
+
   /** Action configuration */
   config: ActionConfig;
-  
+
   /** Repository owner */
   owner: string;
-  
+
   /** Repository name */
   repo: string;
-  
+
   /** PR number */
   prNumber: number;
-  
+
   /** PR metadata */
   headSha: string;
 }
@@ -193,6 +194,9 @@ export async function analyzeFiles(context: AnalysisContext): Promise<AnalysisRe
     prNumber
   );
 
+  // For stats purspose.
+  logLLMUsage();
+
   // Step 6: Verify completeness (local computation, no API call)
   // This logs warnings if the LLM may have missed elements
   core.info('Verifying analysis completeness...');
@@ -266,7 +270,7 @@ async function processBatches(
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       core.warning(`Batch ${i + 1} failed: ${errorMessage}`);
-      
+
       failedBatches.push({
         batchIndex: i,
         files: batch.map(f => f.filename),

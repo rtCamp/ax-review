@@ -26,6 +26,7 @@ import { createBatches } from './utils/batching';
 import { fetchPRFiles, filterWebFiles, shouldSkipFile } from './github/pr';
 import { countElementsInFiles, verifyCompleteness } from './utils/element-counter';
 import { logLLMUsage } from './utils/llm-usage';
+import { loadFindings } from './utils/findings';
 
 /**
  * Result from batch processing.
@@ -179,6 +180,16 @@ export async function analyzeFiles(context: AnalysisContext): Promise<AnalysisRe
     core.info(`Redacted ${secretsFound} potential secrets from diffs`);
   }
 
+  // Load pre-generated findings from external tools if provided
+  let externalFindings: string | undefined;
+  if (config.findingsDir) {
+    const result = loadFindings(config.findingsDir);
+    if (result) {
+      externalFindings = result.content;
+      core.info(`Using ${result.fileCount} external findings file(s) as LLM baseline context`);
+    }
+  }
+
   // Step 4: Create batches for LLM processing
   const batches = createBatches(redactedFiles, config.batchSize);
   core.info(`Created ${batches.length} batches of ${config.batchSize} files each`);
@@ -191,7 +202,8 @@ export async function analyzeFiles(context: AnalysisContext): Promise<AnalysisRe
     systemPrompt,
     owner,
     repo,
-    prNumber
+    prNumber,
+    externalFindings
   );
 
   // For stats purspose.
@@ -250,7 +262,8 @@ async function processBatches(
   systemPrompt: string,
   owner: string,
   repo: string,
-  prNumber: number
+  prNumber: number,
+  externalFindings?: string
 ): Promise<AnalysisResult> {
   const allIssues: A11yIssue[] = [];
   const failedBatches: FailedBatch[] = [];
@@ -261,7 +274,7 @@ async function processBatches(
 
     core.info(`Processing batch ${i + 1}/${batches.length}...`);
 
-    const userPrompt = buildUserPrompt(owner, repo, prNumber, batch);
+    const userPrompt = buildUserPrompt(owner, repo, prNumber, batch, externalFindings);
 
     try {
       const result = await llm.analyze(systemPrompt, userPrompt);

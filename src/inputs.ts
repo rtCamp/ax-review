@@ -25,6 +25,7 @@ export function parseInputs(): ActionConfig {
   const maxFiles = getNumberInput('max-files', GITHUB_LIMITS.DEFAULT_MAX_FILES);
   const batchSize = getNumberInput('batch-size', LLM_LIMITS.DEFAULT_BATCH_SIZE);
   const skipDrafts = getBooleanInput('skip-drafts', true);
+  const findingsDir = getInput('a11y-findings-dir', '');
 
   // Log configuration (without exposing secrets)
   core.info(`Configuration: provider=${llmProvider}, model=${getInput('model', 'default')}, output=${outputMode}`);
@@ -52,6 +53,7 @@ export function parseInputs(): ActionConfig {
     maxFiles,
     batchSize,
     skipDrafts,
+    findingsDir: findingsDir || undefined,
   };
 }
 

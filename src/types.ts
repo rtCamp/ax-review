@@ -211,6 +211,7 @@ export interface ActionConfig {
   maxFiles: number;
   batchSize: number;
   skipDrafts: boolean;
+  findingsDir?: string | undefined;
 }
 
 /**
@@ -219,10 +220,10 @@ export interface ActionConfig {
 export interface FailedBatch {
   /** Batch index (0-based) */
   batchIndex: number;
-  
+
   /** Files that were in the failed batch */
   files: string[];
-  
+
   /** Error message from the failure */
   error: string;
 }
@@ -233,13 +234,13 @@ export interface FailedBatch {
 export interface BatchProcessingResult {
   /** All successfully extracted issues */
   issues: A11yIssue[];
-  
+
   /** Batches that failed to process */
   failedBatches: FailedBatch[];
-  
+
   /** Total batches processed */
   totalBatches: number;
-  
+
   /** Batches that succeeded */
   successfulBatches: number;
 }

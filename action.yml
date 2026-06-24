@@ -54,6 +54,10 @@ inputs:
     required: false
     default: 'true'
 
+  a11y-findings-dir:
+    description: 'Optional path to a directory containing pre-generated a11y reports from earlier workflow steps (used for baseline context).'
+    required: false
+
 outputs:
   issues-found:
     description: 'Total number of issues found'

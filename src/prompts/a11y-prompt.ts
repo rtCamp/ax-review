@@ -226,12 +226,13 @@ export function buildUserPrompt(
   owner: string,
   repo: string,
   prNumber: number,
-  files: FilePatch[]
+  files: FilePatch[],
+  findings?: string
 ): string {
   // Check for prompt injection attempts
   const allContent = files.map(f => f.patch).join('\n');
   const injectionAttempts = detectPromptInjection(allContent);
-  
+
   if (injectionAttempts.length > 0) {
     console.warn('[Security] Potential prompt injection detected in PR content:');
     for (const attempt of injectionAttempts) {
@@ -239,11 +240,11 @@ export function buildUserPrompt(
     }
     // Continue processing - the system prompt is designed to be robust
   }
-  
+
   // Sanitize owner/repo
   const safeOwner = owner.replace(/[^a-zA-Z0-9_-]/g, '');
   const safeRepo = repo.replace(/[^a-zA-Z0-9._-]/g, '');
-  
+
   const fileCount = files.length;
   const addedFiles = files.filter(f => f.status === 'added').length;
   const modifiedFiles = files.filter(f => f.status === 'modified').length;
@@ -259,6 +260,28 @@ Focus only on NEW code (lines with '+' prefix).
 Report issues with exact line numbers matching the [N] position markers.
 
 `;
+
+  const findingsSection = findings
+    ? `
+## Pre-existing Accessibility Findings
+
+The following accessibility issues were detected by automated tools earlier
+in this workflow. Use these as baseline context when analyzing the PR diff
+
+The results may contain detected issues or may indicate that automated checks
+found no accessibility violations.
+
+- Correlate findings with the modified code where applicable
+- Provide remediation guidance for issues that appear in the changed files
+- Identify additional concerns in the diff that the tools did not catch
+- Do NOT simply repeat these findings - reason about them in context of the code
+
+${findings}
+
+---
+
+`
+    : '';
 
   const formattedDiffs = files.map(formatFilePatch).join('\n\n');
 
@@ -281,7 +304,7 @@ For EACH file, systematically check:
 When the SAME issue type appears multiple times, report EACH occurrence separately.
 `;
 
-  return `${header}${formattedDiffs}${footer}`;
+  return `${header}${findingsSection}${formattedDiffs}${footer}`;
 }
 
 /**
@@ -291,7 +314,7 @@ When the SAME issue type appears multiple times, report EACH occurrence separate
 function formatFilePatch(file: FilePatch): string {
   // Sanitize filename to prevent injection
   const safeFilename = sanitizeFilename(file.filename);
-  
+
   const lines = file.patch.split('\n');
   let lineNumber = 0;
   const formattedLines: string[] = [];
@@ -349,13 +372,13 @@ const PROMPT_INJECTION_PATTERNS = [
  */
 export function detectPromptInjection(content: string): string[] {
   const detected: string[] = [];
-  
+
   for (const pattern of PROMPT_INJECTION_PATTERNS) {
     if (pattern.test(content)) {
       detected.push(`Suspicious pattern detected: ${pattern.source}`);
     }
   }
-  
+
   return detected;
 }
 
@@ -365,18 +388,18 @@ export function detectPromptInjection(content: string): string[] {
  */
 export function sanitizePromptContent(content: string): string {
   const injectionAttempts = detectPromptInjection(content);
-  
+
   if (injectionAttempts.length === 0) {
     return content;
   }
-  
+
   // Warn about detected patterns but still process
   // The LLM prompt system is designed to ignore such injections
   console.warn('[Security] Potential prompt injection patterns detected in diff content:');
   for (const attempt of injectionAttempts) {
     console.warn(`[Security] - ${attempt}`);
   }
-  
+
   return content;
 }
 

@@ -1,4 +1,4 @@
-name: Accessibility Review 
+name: Accessibility Review
 
 on:
   pull_request:
@@ -36,12 +36,66 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Install Gitleaks
         run: |
           curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz | tar -xz
           sudo mv gitleaks /usr/local/bin/gitleaks
           gitleaks version
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Install accessibility tools (Pa11y)
+        run: |
+          npm install -g pa11y
+
+      - name: Collect changed files
+        run: |
+          git diff \
+            --name-only \
+            origin/${{ github.base_ref }} \
+            HEAD \
+            > changed-files.txt
+
+          echo "Changed files:"
+          cat changed-files.txt || true
+
+      - name: Create Pa11y config
+        run: |
+          cat > pa11y.json << 'EOF'
+          {
+            "chromeLaunchConfig": {
+              "args": ["--no-sandbox", "--disable-setuid-sandbox"]
+            }
+          }
+          EOF
+
+      - name: Run Pa11y on changed files
+        run: |
+          if [ ! -s changed-files.txt ]; then
+            echo "No changed files found. Skipping accessibility scan."
+            exit 0
+          fi
+
+          mkdir -p .a11y-results
+
+          while read file; do
+            echo "Scanning: $file"
+
+            filename=$(echo "$file" | tr '/' '_')
+
+            pa11y "file://$(pwd)/$file" \
+              --standard WCAG2AA \
+              --reporter json \
+              --config ./pa11y.json \
+              > ".a11y-results/${filename}.json" || true
+
+          done < changed-files.txt
 
       - name: Run Accessibility Review
         uses: rtCamp/ax-review@v1.1.0
@@ -54,6 +108,7 @@ jobs:
           fail-on-issues: true
           max-files: 50
           batch-size: 10
+          a11y-findings-dir: .a11y-results
 
   # Job 2 - URL audit (Runs manually via workflow_dispatch)
   url-audit:

@@ -365,7 +365,7 @@ jobs:
               --standard WCAG2AA \
               --reporter json \
               --config ./pa11y.json \
-              > "pa11y-raw/${idx}.json" 2>/dev/null || true
+              > "pa11y-raw/${idx}.json" || [ $? -eq 2 ]
 
             node -e "
               const fs = require('fs');
@@ -460,7 +460,7 @@ jobs:
               const page = await context.newPage();
 
               try {
-                await page.goto(url, { waitUntil: 'load', timeout: 30000 });
+                await page.goto(result.pageUrl, { waitUntil: 'load', timeout: 30000 });
 
                 for (const [nodeIndex, issue] of result.issues.entries()) {
                   // File pattern: pa11y__<issueCode>__<safe-url>__<node-index>__<safe-selector>.png

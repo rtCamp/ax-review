@@ -25,6 +25,7 @@ import {
   formatDeltaSummary
 } from './utils/formatting';
 import { GITHUB_LIMITS } from './constants';
+import { extractAddedLines } from './utils/diff';
 
 /**
  * Check if an issue is a violation (CRITICAL, SERIOUS, or MODERATE).
@@ -80,7 +81,7 @@ async function postReview(
   const filePatches = await github.getPRFiles(prNumber);
   const patchMap = new Map(filePatches.map(f => [f.filename, f.patch]));
 
-  const comments = await buildInlineComments(violationsByFile, patchMap, github);
+  const comments = await buildInlineComments(violationsByFile, patchMap);
   if (comments.length === 0) return;
 
   // Post review with inline comments but no body.
@@ -104,14 +105,12 @@ async function postReview(
  * - 'success' if no issues
  * 
  * @param github - GitHub API client
- * @param prNumber - PR number (for logging)
  * @param headSha - HEAD commit SHA for check run
  * @param issues - All issues found
  * @param failedBatches - Batches that failed
  */
 async function postCheckRun(
   github: GitHubClient,
-  prNumber: number,
   headSha: string,
   issues: A11yIssue[],
   failedBatches: FailedBatch[]
@@ -170,10 +169,9 @@ async function postCheckRun(
  */
 async function buildInlineComments(
   issuesByFile: Map<string, A11yIssue[]>,
-  patchMap: Map<string, string>,
-  github: GitHubClient
-): Promise<Array<{ path: string; position: number; body: string }>> {
-  const comments: Array<{ path: string; position: number; body: string }> = [];
+  patchMap: Map<string, string>
+): Promise<Array<{ path: string; line: number; side: 'RIGHT'; body: string }>> {
+  const comments: Array<{ path: string; line: number; side: 'RIGHT'; body: string }> = [];
 
   for (const [file, fileIssues] of issuesByFile) {
     const patch = patchMap.get(file);
@@ -182,8 +180,8 @@ async function buildInlineComments(
       continue;
     }
 
-    // Build position map for this file
-    const positionMap = github.buildLineToPositionMap(patch);
+    // Build set of valid added line numbers for this file
+    const validLines = extractAddedLines(patch);
 
     for (const issue of fileIssues) {
       // Skip issues without a specific line
@@ -192,10 +190,8 @@ async function buildInlineComments(
         continue;
       }
 
-      // Convert line number to diff position
-      const position = positionMap.get(issue.line);
-      if (position === undefined) {
-        core.debug(`Could not find position for line ${issue.line} in ${file}`);
+      if (!validLines.has(issue.line)) {
+        core.debug(`Line ${issue.line} is not an added line in ${file}, skipping`);
         continue;
       }
 
@@ -203,7 +199,8 @@ async function buildInlineComments(
       const body = formatIssueComment(issue);
       comments.push({
         path: file,
-        position,
+        line: issue.line,
+        side: 'RIGHT',
         body,
       });
 
@@ -278,6 +275,6 @@ export async function postResults(
   if (outputMode === 'comments') {
     await postReview(github, prNumber, headSha, issues, failedBatches);
   } else {
-    await postCheckRun(github, prNumber, headSha, issues, failedBatches);
+    await postCheckRun(github, headSha, issues, failedBatches);
   }
 }

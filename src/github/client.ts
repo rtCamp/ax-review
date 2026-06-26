@@ -131,7 +131,7 @@ export class GitHubClient {
   async createReview(
     prNumber: number,
     headSha: string,
-    comments: Array<{ path: string; position: number; body: string }>,
+    comments: Array<{ path: string; line: number; side: 'RIGHT'; body: string }>,
     body: string
   ): Promise<number> {
     const { data: review } = await this.octokit.rest.pulls.createReview({
@@ -223,55 +223,5 @@ export class GitHubClient {
 
     core.info(`Created check run ${checkRun.id} with ${annotations.length} annotations`);
     return checkRun.id;
-  }
-
-  /**
-   * Build a map from line number to diff position.
-   * GitHub's review API uses diff position (not file line number).
-   */
-  buildLineToPositionMap(patch: string): Map<number, number> {
-    const map = new Map<number, number>();
-    const lines = patch.split('\n');
-
-    let position = 0;
-    let newFileLine = 0;
-
-    for (const line of lines) {
-      // Parse hunk header: @@ -a,b +start,count @@
-      if (line.startsWith('@@')) {
-        const match = line.match(/\+(\d+)/);
-        if (match && match[1]) {
-          newFileLine = parseInt(match[1], 10);
-        }
-        continue;
-      }
-
-      // Skip file headers
-      if (line.startsWith('+++') || line.startsWith('---')) {
-        continue;
-      }
-
-      // Added line
-      if (line.startsWith('+') && !line.startsWith('+++')) {
-        position++;
-        map.set(newFileLine, position);
-        newFileLine++;
-        continue;
-      }
-
-      // Removed line
-      if (line.startsWith('-') && !line.startsWith('---')) {
-        position++;
-        continue;
-      }
-
-      // Context line
-      if (!line.startsWith('\\')) {
-        position++;
-        newFileLine++;
-      }
-    }
-
-    return map;
   }
 }

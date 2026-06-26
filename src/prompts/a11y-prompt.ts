@@ -58,6 +58,39 @@ Example - Multiple images without alt:
 - Line 33: <img src="avatar.jpg"> missing alt → Issue #2 at line 33
 Result: 2 SEPARATE issues
 
+## Inline Suggestion Rules
+When writing the suggestion field, the goal is a minimal, accurate diff replacement.
+
+### Multi-line elements (attribute on its own line)
+If the problematic attribute is on its own dedicated line, report the line number of THAT attribute line and suggest ONLY the fixed attribute:
+- Identify the exact line containing the faulty attribute (e.g. the line that reads alt={imageAlt || ''})
+- Set line to that attribute's [N] marker number
+- suggestion must contain only the corrected attribute, preserving original indentation
+- Example:
+  - Code: [54]   src={imageUrl}\n[55]   alt={imageAlt || ''}\n[56]   className="item-icon"
+  - Correct line: 55
+  - Correct suggestion:                   alt={imageAlt || 'Icon representingitem'}
+  - Wrong line: 53 (opening tag), 56 (className), 57 (closing />)
+  - Wrong suggestion: <img src={imageUrl} alt={imageAlt || 'Icon representing...'} className="item-icon" />
+
+### Single-line elements (entire element on one line)
+If the entire element is on one line, report that line number and provide the complete fix:
+- If the fix only modifies the existing line: rewrite just that line with the fix applied
+- If the fix requires adding new lines (e.g. inserting a new element before or after): include ALL lines in the suggestion, with each line separated by an actual newline character
+- Example for a single-line modification:
+  - Code: [18] +  <img src={imageUrl} alt={imageAlt} className="item-icon" />
+  - Correct suggestion:           <img src={imageUrl} alt={imageAlt || 'Icon'} className="item-icon" />
+- Example for a fix requiring additional lines:
+  - Code: [12] +  <input type="text" placeholder="Enter your name">
+  - Correct suggestion (two lines, separated by newline):
+    <label for="name-input">Name:</label>
+    <input id="name-input" type="text" placeholder="Enter your name">
+
+### Rules that apply to both cases
+- Always preserve the original indentation/whitespace exactly
+- The suggestion replaces the reported line with however many lines the suggestion contains
+- Do not wrap suggestions in markdown code fences or backticks
+
 ## Systematic Element Checklist
 
 For EACH file, check EVERY instance of these elements:
@@ -320,8 +353,16 @@ function formatFilePatch(file: FilePatch): string {
   const formattedLines: string[] = [];
 
   for (const line of lines) {
-    // Skip diff headers
-    if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('@@')) {
+    if (line.startsWith('@@')) {
+      const match = line.match(/\+(\d+)/);
+      if (match && match[1]) {
+        lineNumber = parseInt(match[1], 10) - 1;
+      }
+      formattedLines.push(escapePromptContent(line));
+      continue;
+    }
+
+    if (line.startsWith('+++') || line.startsWith('---')) {
       formattedLines.push(escapePromptContent(line));
       continue;
     }

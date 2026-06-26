@@ -87,7 +87,7 @@ export async function run(): Promise<void> {
     // Skip draft PRs if configured
     if (config.skipDrafts && prInfo.isDraft) {
       core.info('Skipping draft PR - analysis skipped by configuration');
-      await github.createReview(prNumber, prInfo.headSha, [], 
+      await github.createReview(prNumber, prInfo.headSha, [],
         '<!-- ax-review -->\n## Accessibility Review Skipped\n\n' +
         'This PR is marked as a draft. Analysis will run when marked ready for review.\n\n' +
         'To analyze draft PRs, set `skip-drafts: false` in the workflow.'
@@ -105,7 +105,7 @@ export async function run(): Promise<void> {
       config.model ?? undefined,
       config.ollamaUrl
     );
-    
+
     const llm: LLMClient = createLLMClient(config.llmProvider, llmConfig);
     core.info(`${config.llmProvider} client initialized${config.model ? ` with model ${config.model}` : ''}`);
 
@@ -131,7 +131,7 @@ export async function run(): Promise<void> {
         `${result.failedBatches.length}/${result.totalBatches} batches failed to process. ` +
         'Some files may not have been analyzed.'
       );
-      
+
       for (const failed of result.failedBatches) {
         core.warning(`Batch ${failed.batchIndex + 1}: ${failed.error}`);
         core.debug(`Files: ${failed.files.join(', ')}`);
@@ -177,7 +177,7 @@ export async function run(): Promise<void> {
     // Handle unexpected errors
     const message = error instanceof Error ? error.message : String(error);
     core.setFailed(`Unexpected error: ${message}`);
-    
+
     // Log full stack trace for debugging
     if (error instanceof Error && error.stack) {
       core.debug(`Stack trace: ${error.stack}`);

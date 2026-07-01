@@ -296,18 +296,30 @@ Report issues with exact line numbers matching the [N] position markers.
 
   const findingsSection = findings
     ? `
-## Pre-existing Accessibility Findings
+## Pre-existing Accessibility Findings (CONTEXT/REFERENCE ONLY)
 
-The following accessibility issues were detected by automated tools earlier
-in this workflow. Use these as baseline context when analyzing the PR diff
+Automated tools ran earlier in the his workflow and produced the findings below.
 
-The results may contain detected issues or may indicate that automated checks
-found no accessibility violations.
+### How to use these findings
 
-- Correlate findings with the modified code where applicable
-- Provide remediation guidance for issues that appear in the changed files
-- Identify additional concerns in the diff that the tools did not catch
-- Do NOT simply repeat these findings - reason about them in context of the code
+These findings describe issues detected in the **full file content**, not just
+the diff. Many findings will reference lines that are unchanged context — those
+lines do not exist in the PR diff and CANNOT be anchored to a review comment or
+should be a violation.
+
+CRITICAL RULES for using these findings:
+- These are provided as CONTEXT ONLY to help you understand existing issues.
+  Use it to understand the accessibility state of the files, not
+  as a list of comments to post verbatim.
+- Do NOT report the same violation twice. If a finding from these tools
+  matches something you independently identified in the diff, report it ONCE
+  at the correct diff line number. Do not create a second comment from the tool
+  finding.
+- Do NOT try to map these line numbers to the diff — they will not match
+- Line numbers in these findings refer to the extracted/scanned file, which
+   may differ from the PR diff line numbering. Always use the [N] position
+   markers from the diff below as the authoritative line reference.
+- If a finding refers to a line not present in the diff, DO NOT report it at all
 
 ${findings}
 
@@ -318,6 +330,41 @@ ${findings}
 
   const formattedDiffs = files.map(formatFilePatch).join('\n\n');
 
+  const validLinesSection = files.map(file => {
+    const lines = file.patch.split('\n');
+    const validLines: number[] = [];
+    let lineNumber = 0;
+
+    for (const line of lines) {
+      if (line.startsWith('@@')) {
+        const match = line.match(/\+(\d+)/);
+        if (match?.[1]) lineNumber = parseInt(match[1], 10) - 1;
+        continue;
+      }
+      if (line.startsWith('+++') || line.startsWith('---')) continue;
+      if (line.startsWith('+')) {
+        lineNumber++;
+        validLines.push(lineNumber);
+        continue;
+      }
+      if (!line.startsWith('-') && !line.startsWith('\\')) {
+        lineNumber++;
+      }
+    }
+
+    return `- ${sanitizeFilename(file.filename)}: valid lines are [${validLines.join(', ')}]`;
+  }).join('\n');
+
+  const validLinesReminder = `
+## Valid Reportable Lines
+You may ONLY report issues on these exact line numbers (lines added or present in the diff).
+Any other line number will be rejected and the comment will be silently dropped.
+Do not use line numbers from the Pre-existing Accessibility Findings section above if provided.
+Those refer to full file line numbers which are different from diff line numbers.
+
+${validLinesSection}
+`;
+
   const footer = `
 
 ## Important Reminders
@@ -326,6 +373,8 @@ ${findings}
 3. Provide EXACT code fixes, not instructions
 4. Include confidence level for each finding
 5. Describe the impact on users with disabilities
+
+${validLinesReminder}
 
 ## Completeness Checklist
 For EACH file, systematically check:

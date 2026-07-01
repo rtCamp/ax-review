@@ -91,6 +91,9 @@ export const SKIP_PATTERNS = [
   /yarn\.lock$/,
   /\.snap$/,
   /__snapshots__\//,
+  // SVG files
+  /\.svg$/,
+  /\.svgz$/,
   // Test files
   /__tests__\//,
   /\.test\.(js|ts|jsx|tsx|py|rb)$/,
@@ -99,6 +102,9 @@ export const SKIP_PATTERNS = [
   /spec\.(js|ts|jsx|tsx|py|rb)$/,
   // Config files
   /\.env(\.|$)/,
+  /\.xml$/,
+  /\.xsl$/,
+  /\.xslt$/,
   /tsconfig/,
   /\.config\.(js|ts|json|mjs|cjs)$/,
   /config\.(js|ts|json)$/,
@@ -118,6 +124,7 @@ export const SKIP_PATTERNS = [
   /dist\//,
   /build\//,
   /\.next\//,
+  /\.map$/,
   /coverage\//,
   // Database migrations
   /migrations?\//,
@@ -314,7 +321,7 @@ export function containsMarkupPatterns(patchContent: string): boolean {
     .split('\n')
     .filter(line => line.startsWith('+') && !line.startsWith('+++'))
     .join('\n');
-  
+
   // Check against all markup patterns
   return MARKUP_CONTENT_PATTERNS.some(pattern => pattern.test(addedLines));
 }
@@ -348,20 +355,20 @@ export function shouldAnalyzeFile(file: FilePatch): boolean {
   if (!file.patch || file.patch.trim() === '') {
     return false;
   }
-  
+
   const filename = file.filename;
   const ext = getFileExtension(filename);
-  
+
   // Direct markup files - always analyze
   if (DIRECT_MARKUP_EXTENSIONS_SET.has(ext as typeof DIRECT_MARKUP_EXTENSIONS[number])) {
     return true;
   }
-  
+
   // Ambiguous extensions - check content
   if (AMBIGUOUS_EXTENSIONS_SET.has(ext as typeof AMBIGUOUS_EXTENSIONS[number])) {
     return containsMarkupPatterns(file.patch);
   }
-  
+
   // Unknown extensions - check content defensively
   // This catches edge cases like .md files, custom extensions, etc.
   return containsMarkupPatterns(file.patch);
@@ -456,7 +463,7 @@ export function filterFilesForAnalysis(files: FilePatch[]): FilePatch[] {
     if (shouldSkipFile(file)) {
       return false;
     }
-    
+
     // Then, use hybrid approach
     return shouldAnalyzeFile(file);
   });

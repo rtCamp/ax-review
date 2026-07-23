@@ -634,11 +634,177 @@ jobs:
 
           node generate-report.js
 
+      - name: Generate HTML report
+        run: |
+          cat << 'SCRIPT' > generate-html-report.js
+          const fs = require('fs'), path = require('path');
+          function safeRead(f){try{return JSON.parse(fs.readFileSync(f,'utf8'));}catch{return null;}}
+          function htmlEscape(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+          function normalizeHtml(h){return(h||'').replace(/\s+/g,' ').trim().slice(0,200);}
+          function embedImage(p){if(!p)return null;try{const b=fs.readFileSync(path.resolve(p));return`data:image/png;base64,${b.toString('base64')}`;}catch{return null;}}
+          const axeRaw=safeRead('axe-results.json')||[], pa11yRaw=safeRead('pa11y-results.json')||[], lhDir='lighthouse-reports';
+          const allUrls=new Set([...axeRaw.map(r=>r.url),...pa11yRaw.map(r=>r.pageUrl)]);
+          const skippedPages=axeRaw.filter(r=>r.skipped).map(r=>({url:r.url,error:r.error||'Unknown error'}));
+          const screenshotFailures=pa11yRaw.filter(r=>r.screenshotSkipped).map(r=>({url:r.pageUrl,error:r.screenshotError||'Unknown error'}));
+          const findings=new Map(), passes=new Map();
+          function upsert(ruleId,description,impact,helpUrl,source,html,target,url,screenshotPath){
+            if(!findings.has(ruleId))findings.set(ruleId,{ruleId,description,impact,helpUrl,sources:new Set(),nodes:[]});
+            const f=findings.get(ruleId); f.sources.add(source);
+            if(!f.nodes.some(n=>normalizeHtml(n.html)===normalizeHtml(html)))
+              f.nodes.push({html:html||'',target:target||'',url:url||'',screenshotPath:screenshotPath||null});
+          }
+          function upsertPass(ruleId,description,helpUrl,source){
+            if(!passes.has(ruleId))passes.set(ruleId,{ruleId,description,helpUrl,sources:new Set()});
+            passes.get(ruleId).sources.add(source);
+          }
+          for(const r of axeRaw){
+            for(const v of(r.violations||[]))for(const n of(v.nodes||[]))
+              upsert(v.id,v.help||v.description||'',v.impact||'unknown',v.helpUrl||'','axe',n.html,
+                Array.isArray(n.target)?n.target.join(', '):(n.target||''),r.url,n.screenshotPath||null);
+            for(const p of(r.passes||[]))upsertPass(p.id,p.help||p.description||'',p.helpUrl||'','axe');
+          }
+          for(const r of pa11yRaw)for(const i of(r.issues||[]))
+            upsert(i.code,i.message||'',i.type==='error'?'serious':'minor','https://www.w3.org/TR/WCAG21/','pa11y',
+              i.context||'',i.selector||'',r.pageUrl,i.screenshotPath||null);
+          const impactOrder={critical:0,serious:1,moderate:2,minor:3,warning:4,unknown:5};
+          const allFindings=[...findings.values()].sort((a,b)=>(impactOrder[a.impact]??5)-(impactOrder[b.impact]??5));
+          const totalPasses=passes.size;
+          const lhScores={};
+          if(fs.existsSync(lhDir))for(const f of fs.readdirSync(lhDir)){
+            if(!f.endsWith('.json'))continue;
+            const lh=safeRead(path.join(lhDir,f)); if(!lh)continue;
+            lhScores[lh.finalUrl||lh.requestedUrl||f.replace('.json','')]=Math.round((lh.categories?.accessibility?.score??0)*100);
+          }
+          const sv=Object.values(lhScores), agg=sv.length?Math.round(sv.reduce((a,b)=>a+b,0)/sv.length):null;
+          const countByImpact={};
+          for(const f of allFindings)countByImpact[f.impact]=(countByImpact[f.impact]||0)+1;
+          const totalErrors=(countByImpact.critical||0)+(countByImpact.serious||0);
+          const totalWarnings=(countByImpact.moderate||0)+(countByImpact.minor||0)+(countByImpact.warning||0);
+          const IMPACT_COLOR={critical:'#c0392b',serious:'#e67e22',moderate:'#f39c12',minor:'#27ae60',warning:'#95a5a6',unknown:'#7f8c8d'};
+          const IMPACT_EMOJI={critical:'🔴',serious:'🟠',moderate:'🟡',minor:'🟢',warning:'⚪',unknown:'⚫'};
+          function impactBadge(impact){const c=IMPACT_COLOR[impact]||'#7f8c8d',e=IMPACT_EMOJI[impact]||'⚫';return`<span class="badge" style="background:${c}">${e} ${htmlEscape(impact)}</span>`;}
+          function scoreLine(s){if(s===null)return{text:'N/A',cls:'score-na'};if(s>=90)return{text:`${s}/100`,cls:'score-pass'};if(s>=50)return{text:`${s}/100`,cls:'score-warn'};return{text:`${s}/100`,cls:'score-fail'};}
+          function findingCards(){
+            if(!allFindings.length)return'<p class="no-findings">✅ No violations found across all tools.</p>';
+            return allFindings.map(f=>{
+              const color=IMPACT_COLOR[f.impact]||'#7f8c8d';
+              const nodeHtml=f.nodes.map((n,i)=>{
+                const dataUri=embedImage(n.screenshotPath);
+                const imgTag=dataUri?`<figure class="screenshot"><img src="${dataUri}" alt="Screenshot for ${htmlEscape(n.url)}" loading="lazy"/><figcaption>${htmlEscape(path.basename(n.screenshotPath))}</figcaption></figure>`:'';
+                return`<div class="node-item"><div class="node-meta"><span class="node-index">#${i+1}</span>${n.url?`<a href="${htmlEscape(n.url)}" target="_blank" rel="noopener">${htmlEscape(n.url)}</a>`:''}</div>${n.target?`<p class="node-target"><strong>Target:</strong> <code>${htmlEscape(n.target)}</code></p>`:''}${n.html?`<pre class="code-block"><code>${htmlEscape(n.html)}</code></pre>`:''}${imgTag}</div>`;
+              }).join('');
+              return`<details class="finding-card" style="--impact-color:${color}"><summary class="finding-summary"><span class="finding-title">${IMPACT_EMOJI[f.impact]||'⚫'} <code class="rule-id">${htmlEscape(f.ruleId)}</code></span>${impactBadge(f.impact)}<span class="finding-sources">${[...f.sources].map(htmlEscape).join(', ')}</span><span class="finding-count">${f.nodes.length} element${f.nodes.length!==1?'s':''}</span></summary><div class="finding-body"><table class="meta-table"><tr><th>Impact</th><td>${impactBadge(f.impact)}</td></tr><tr><th>Source(s)</th><td>${[...f.sources].map(htmlEscape).join(', ')}</td></tr><tr><th>Description</th><td>${htmlEscape(f.description)}</td></tr>${f.helpUrl?`<tr><th>Reference</th><td><a href="${htmlEscape(f.helpUrl)}" target="_blank" rel="noopener">More info ↗</a></td></tr>`:''}</table><h4 class="nodes-heading">Affected elements (${f.nodes.length})</h4><div class="node-list">${nodeHtml}</div></div></details>`;
+            }).join('\n');
+          }
+          function lhTable(){
+            if(!Object.keys(lhScores).length)return'<p><em>No Lighthouse data found.</em></p>';
+            const rows=Object.entries(lhScores).map(([u,s])=>{const{text,cls}=scoreLine(s);return`<tr><td><a href="${htmlEscape(u)}" target="_blank" rel="noopener">${htmlEscape(u)}</a></td><td class="${cls}">${text}</td></tr>`;}).join('');
+            return`<table class="lh-table"><thead><tr><th>URL</th><th>Score</th></tr></thead><tbody>${rows}</tbody></table>`;
+          }
+          function warnSection(){
+            if(!skippedPages.length&&!screenshotFailures.length)return'';
+            const sp=skippedPages.map(s=>`<li><strong>${htmlEscape(s.url)}</strong> — ${htmlEscape(s.error)}</li>`).join('');
+            const sf=screenshotFailures.map(s=>`<li><strong>${htmlEscape(s.url)}</strong> — ${htmlEscape(s.error)}</li>`).join('');
+            return`<section class="warn-section"><h2>⚠️ Scan Warnings</h2>${skippedPages.length?`<h3>Pages Not Scanned</h3><p>These pages could not be loaded during the Axe-core scan.</p><ul>${sp}</ul>`:''}${screenshotFailures.length?`<h3>Screenshots Unavailable</h3><p>These pages were scanned by Pa11y but could not be loaded for screenshots.</p><ul>${sf}</ul>`:''}</section>`;
+          }
+          const aggScore=scoreLine(agg);
+          const generatedAt=new Date().toUTCString();
+          const html=`<!DOCTYPE html>
+          <html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+          <title>A11y Compliance Report</title><style>
+          *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+          :root{--bg:#0f1117;--surface:#1a1d27;--surface2:#22263a;--border:#2e3250;--text:#e2e8f0;--muted:#8892a4;--accent:#6c8fff;--pass:#22c55e;--warn:#f59e0b;--fail:#ef4444;--radius:10px;--mono:'JetBrains Mono','Fira Code',monospace}
+          body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;font-size:15px;line-height:1.6;padding:0 0 4rem}
+          a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+          .report-header{background:linear-gradient(135deg,#141828 0%,#1e2540 100%);border-bottom:1px solid var(--border);padding:2.5rem 2rem 2rem}
+          .report-header h1{font-size:1.75rem;font-weight:700;letter-spacing:-.02em;margin-bottom:.5rem}
+          .report-header .meta{color:var(--muted);font-size:.85rem;display:flex;flex-wrap:wrap;gap:.5rem 1.5rem}
+          .container{max-width:1100px;margin:0 auto;padding:0 1.5rem}
+          section{margin-top:2.5rem}
+          h2{font-size:1.2rem;font-weight:600;border-bottom:1px solid var(--border);padding-bottom:.5rem;margin-bottom:1rem}
+          h3{font-size:1rem;font-weight:600;margin:1rem 0 .4rem}h4{font-size:.9rem;font-weight:600;margin:1rem 0 .4rem;color:var(--muted)}
+          .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1rem;margin-top:1rem}
+          .stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1.1rem 1.2rem}
+          .stat-card .stat-label{font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+          .stat-card .stat-value{font-size:2rem;font-weight:700;line-height:1.1;margin-top:.2rem}
+          .stat-card .stat-value.red{color:var(--fail)}.stat-card .stat-value.gold{color:var(--warn)}.stat-card .stat-value.grn{color:var(--pass)}.stat-card .stat-value.blue{color:var(--accent)}
+          .lh-agg{font-size:2.2rem;font-weight:700;margin:.5rem 0 1rem}
+          .score-pass{color:var(--pass)}.score-warn{color:var(--warn)}.score-fail{color:var(--fail)}.score-na{color:var(--muted)}
+          .lh-table{width:100%;border-collapse:collapse;font-size:.9rem}.lh-table th,.lh-table td{padding:.55rem .8rem;border:1px solid var(--border);text-align:left}.lh-table th{background:var(--surface2);color:var(--muted);font-weight:600}.lh-table tr:nth-child(even) td{background:var(--surface)}
+          .meta-table{width:100%;border-collapse:collapse;font-size:.9rem}.meta-table th,.meta-table td{padding:.45rem .75rem;border:1px solid var(--border);text-align:left;vertical-align:top}.meta-table th{background:var(--surface2);color:var(--muted);font-weight:600;white-space:nowrap;width:140px}
+          .warn-section{background:#2a1a0a;border:1px solid #5a3a10;border-radius:var(--radius);padding:1.25rem 1.5rem;margin-top:2.5rem}.warn-section h2{border-color:#5a3a10}.warn-section ul{padding-left:1.25rem}.warn-section li{margin:.35rem 0;font-size:.88rem}
+          .findings-list{display:flex;flex-direction:column;gap:.75rem;margin-top:1rem}
+          .finding-card{background:var(--surface);border:1px solid var(--border);border-left:4px solid var(--impact-color,#7f8c8d);border-radius:var(--radius);overflow:hidden}
+          .finding-summary{display:flex;align-items:center;gap:.75rem;padding:.85rem 1.1rem;cursor:pointer;list-style:none;flex-wrap:wrap}
+          .finding-summary::-webkit-details-marker{display:none}.finding-summary::before{content:'▶';font-size:.7rem;color:var(--muted);transition:transform .15s;flex-shrink:0}
+          details[open]>.finding-summary::before{transform:rotate(90deg)}
+          .finding-title{font-weight:600;flex:1;min-width:0}.rule-id{font-family:var(--mono);font-size:.85rem}
+          .finding-sources{font-size:.78rem;color:var(--muted)}.finding-count{font-size:.78rem;color:var(--muted);margin-left:auto;white-space:nowrap}
+          .badge{display:inline-block;padding:.15rem .55rem;border-radius:4px;font-size:.72rem;font-weight:700;color:#fff;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap}
+          .finding-body{padding:1rem 1.25rem 1.25rem;border-top:1px solid var(--border)}
+          .nodes-heading{margin-top:1.25rem}
+          .node-list{display:flex;flex-direction:column;gap:1rem;margin-top:.6rem}
+          .node-item{background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:.85rem 1rem}
+          .node-meta{display:flex;align-items:center;gap:.6rem;margin-bottom:.4rem;font-size:.85rem;flex-wrap:wrap}
+          .node-index{background:var(--border);color:var(--muted);border-radius:4px;padding:.1rem .4rem;font-size:.72rem;font-weight:700;flex-shrink:0}
+          .node-target{font-size:.82rem;margin:.35rem 0}
+          .code-block{background:#0a0c14;border:1px solid var(--border);border-radius:6px;padding:.7rem 1rem;overflow-x:auto;font-family:var(--mono);font-size:.78rem;line-height:1.5;white-space:pre-wrap;word-break:break-all;margin:.5rem 0}
+          .screenshot{margin:.75rem 0 0}.screenshot img{max-width:100%;border:2px solid #c0392b;border-radius:6px;display:block}.screenshot figcaption{font-size:.72rem;color:var(--muted);font-family:var(--mono);margin-top:.3rem}
+          .no-findings{background:#0f2d1a;border:1px solid #166534;border-radius:var(--radius);padding:1.25rem 1.5rem;color:var(--pass);font-weight:600}
+          .report-footer{margin-top:3rem;border-top:1px solid var(--border);padding-top:1rem;font-size:.78rem;color:var(--muted);text-align:center}
+          @media(max-width:640px){.stat-grid{grid-template-columns:repeat(2,1fr)}.finding-count{margin-left:0}}
+          @media(prefers-reduced-motion:reduce){.finding-summary::before{transition:none}}
+          </style></head><body>
+          <header class="report-header"><div class="container">
+          <h1>A11y Compliance Report</h1>
+          <div class="meta">
+          <span>${allUrls.size} URL${allUrls.size!==1?'s':''} audited</span>
+          <span>${htmlEscape(generatedAt)}</span>
+          </div></div></header>
+          <div class="container">
+          <section><h2>Summary</h2><div class="stat-grid">
+          <div class="stat-card"><div class="stat-label">🔴 Errors</div><div class="stat-value red">${totalErrors}</div></div>
+          <div class="stat-card"><div class="stat-label">🟡 Warnings</div><div class="stat-value gold">${totalWarnings}</div></div>
+          <div class="stat-card"><div class="stat-label">✅ Passes</div><div class="stat-value grn">${totalPasses}</div></div>
+          <div class="stat-card"><div class="stat-label">🔵 Unique violations</div><div class="stat-value blue">${allFindings.length}</div></div>
+          </div></section>
+          <section><h2>Lighthouse Accessibility Score</h2>
+          ${agg!==null?`<div class="lh-agg ${aggScore.cls}">${aggScore.text} <small style="font-size:1rem;font-weight:400;color:var(--muted)">avg across ${sv.length} page${sv.length!==1?'s':''}</small></div>`:'<p><em>No Lighthouse data found.</em></p>'}
+          ${lhTable()}
+          <p style="margin-top:.6rem;font-size:.8rem;color:var(--muted)"><a href="https://developer.chrome.com/docs/lighthouse/accessibility/scoring" target="_blank" rel="noopener">Chrome Developer Scoring Documentation ↗</a></p>
+          </section>
+          ${warnSection()}
+          <section><h2>Findings (${allFindings.length} unique violation${allFindings.length!==1?'s':''})</h2>
+          <p style="font-size:.85rem;color:var(--muted);margin-bottom:.75rem">Screenshots are embedded directly — no external artifacts needed. Violating elements are highlighted with a red border.</p>
+          <div class="findings-list">${findingCards()}</div></section>
+          </div>
+          <footer class="report-footer"><div class="container">Generated by Axe-core · Pa11y · Lighthouse &nbsp;|&nbsp; ${htmlEscape(generatedAt)}</div></footer>
+          </body></html>`;
+          fs.mkdirSync('a11y-report',{recursive:true});
+          fs.writeFileSync('a11y-report/report.html',html,'utf8');
+          const embedded=allFindings.flatMap(f=>f.nodes).filter(n=>{if(!n.screenshotPath)return false;try{fs.accessSync(n.screenshotPath);return true;}catch{return false;}}).length;
+          console.log('✅ HTML report written — a11y-report/report.html');
+          console.log(`   Unique violations : ${allFindings.length}`);
+          console.log(`   Errors            : ${totalErrors}`);
+          console.log(`   Warnings          : ${totalWarnings}`);
+          console.log(`   Passes            : ${totalPasses}`);
+          console.log(`   Screenshots embed : ${embedded}`);
+          if(agg!==null)console.log(`   Lighthouse Score  : ${aggScore.text}`);
+          SCRIPT
+
+          node generate-html-report.js
+
       - name: Upload A11y Report
         uses: actions/upload-artifact@v6
         with:
           name: a11y-compliance-report
           path: a11y-report/report.md
+
+      - name: Upload HTML Report
+        uses: actions/upload-artifact@v6
+        with:
+          name: a11y-html-report
+          path: a11y-report/report.html
 
       - name: Upload Screenshots
         uses: actions/upload-artifact@v6
@@ -674,6 +840,7 @@ jobs:
 
             const reportUrl      = artifactUrl('a11y-compliance-report');
             const screenshotsUrl = artifactUrl('a11y-screenshots');
+            const htmlReportUrl  = artifactUrl('a11y-html-report');
 
             let body = fs.readFileSync(REPORT_FILE, 'utf8');
 
@@ -685,6 +852,11 @@ jobs:
             body += [
               '',
               '---',
+              '',
+              `> **Self-contained HTML report** (screenshots embedded): [Download](${htmlReportUrl})`,
+            ].join('\n');
+
+            body += [
               '',
               `> **Workflow run:** [View on GitHub Actions](${RUN_URL})`,
             ].join('\n');
@@ -707,6 +879,7 @@ jobs:
                 '> ⚠️ The full report exceeds GitHub\'s issue body limit.',
                 '> Download the artifacts directly:',
                 `> - [Full report](${reportUrl})`,
+                `> - [Self-contained HTML report](${htmlReportUrl})`,
                 `> - [Element screenshots](${screenshotsUrl})`,
                 '',
                 '---',

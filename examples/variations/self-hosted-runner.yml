@@ -1,0 +1,885 @@
+name: Accessibility URL Audit
+
+on:
+  workflow_dispatch:
+    inputs:
+      input-type:
+        description: "Input type: urls | csv | sitemap"
+        required: true
+        default: "urls"
+        type: choice
+        options:
+          - urls
+          - csv
+          - sitemap
+      urls:
+        description: "URLs, local CSV path, or sitemap URL(s) (based on input-type)"
+        required: true
+        default: "https://example.com"
+
+jobs:
+  a11y:
+    runs-on: [self-hosted] 
+
+    permissions:
+      issues: write
+      contents: read
+      actions: read
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Resolve URLs
+        run: |
+          cat << 'SCRIPT' > resolve-urls.js
+          const fs = require('fs');
+          const path = require('path');
+          const http = require('https');
+          const httpPlain = require('http');
+
+          const inputType = process.env.INPUT_TYPE.trim();
+          const input     = process.env.INPUT_VALUE.trim();
+
+          function fetch(url) {
+            return new Promise((resolve, reject) => {
+              const client = url.startsWith('https') ? http : httpPlain;
+              client.get(url, (res) => {
+                if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                  const redirectUrl = res.headers.location;
+                  res.resume();
+                  return resolve(fetch(redirectUrl));
+                }
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => resolve(data));
+              }).on('error', reject);
+            });
+          }
+
+          function extractSitemapUrls(xml) {
+            const matches = [...xml.matchAll(/<loc>\s*(.*?)\s*<\/loc>/gi)];
+            return matches.map(m => m[1].trim()).filter(Boolean);
+          }
+
+          async function resolveSitemap(url, visited) {
+            if (visited.has(url)) {
+              console.warn(`Already visited ${url}, skipping to avoid cycles`);
+              return [];
+            }
+            visited.add(url);
+            console.log(`Resolving sitemap: ${url}`);
+            const content = await fetch(url);
+            const extracted = extractSitemapUrls(content);
+            const results = [];
+            for (const item of extracted) {
+              if (/\.xml(\?|$)/i.test(item)) {
+                results.push(...await resolveSitemap(item, visited));
+              } else {
+                results.push(item);
+              }
+            }
+            return [...new Set(results)];
+          }
+
+          function extractCsvUrls(csv) {
+            const lines = csv.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+            if (lines.length === 0) return [];
+            const header = lines[0].toLowerCase().split(',').map(h => h.trim().replace(/^"|"$/g, ''));
+            const urlColIndex = header.findIndex(h => h === 'url' || h === 'urls');
+            const hasHeader = urlColIndex !== -1 || !header[0].startsWith('http');
+            const dataLines = hasHeader ? lines.slice(1) : lines;
+            const colIndex  = urlColIndex !== -1 ? urlColIndex : 0;
+            return dataLines
+              .map(line => {
+                const cols = line.split(',');
+                return (cols[colIndex] || '').trim().replace(/^"|"$/g, '');
+              })
+              .filter(v => v.startsWith('http'));
+          }
+
+          async function main() {
+            let urls = [];
+
+            if (inputType === 'sitemap') {
+              const sitemapEntries = input.split(',').map(s => s.trim()).filter(Boolean);
+              console.log(`Resolving ${sitemapEntries.length} sitemap(s)...`);
+              const visited = new Set();
+              for (const sitemapUrl of sitemapEntries) {
+                const found = await resolveSitemap(sitemapUrl, visited);
+                console.log(`  ${sitemapUrl}: ${found.length} URL(s)`);
+                urls.push(...found);
+              }
+              urls = [...new Set(urls)];
+              console.log(`Found ${urls.length} unique URL(s) across all sitemaps`);
+
+            } else if (inputType === 'csv') {
+              console.log(`Reading local CSV: ${input}`);
+              try {
+                const csvContent = fs.readFileSync(path.resolve(input), 'utf8');
+                urls = extractCsvUrls(csvContent);
+              } catch (err) {
+                console.error(`Failed to read local CSV file: ${err.message}`);
+                process.exit(1);
+              }
+              console.log(`Found ${urls.length} URL(s) in CSV`);
+
+            } else {
+              urls = input.split(',').map(u => u.trim()).filter(Boolean);
+              console.log(`Using ${urls.length} URL(s) from direct input`);
+            }
+
+            if (urls.length === 0) {
+              console.error('No valid URLs found. Aborting.');
+              process.exit(1);
+            }
+
+            fs.writeFileSync('resolved-urls.txt', urls.join(','), 'utf8');
+            console.log(`resolved-urls.txt written with ${urls.length} URL(s)`);
+          }
+
+          main().catch(err => { console.error(err); process.exit(1); });
+          SCRIPT
+          node resolve-urls.js
+        env:
+          INPUT_TYPE:  ${{ github.event.inputs.input-type }}
+          INPUT_VALUE: ${{ github.event.inputs.urls }}
+
+      - name: Install deps
+        run: |
+          npm init -y
+          npm install playwright @axe-core/playwright lighthouse
+          npm install -g pa11y
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Get Playwright Chromium path
+        run: |
+          CHROME=$(node -e "const { chromium } = require('playwright'); console.log(chromium.executablePath())")
+          echo "CHROME_PATH=$CHROME" >> $GITHUB_ENV
+          echo "Using $CHROME"
+
+      - name: Run axe-core (Playwright)
+        run: |
+          cat << 'EOF' > axe-test.js
+          const { chromium } = require('playwright');
+          const AxeBuilder = require('@axe-core/playwright').default;
+          const fs = require('fs');
+
+          function safeSegment(str) {
+            return String(str || '')
+              .replace(/[^a-zA-Z0-9.\-]/g, '_')
+              .replace(/_+/g, '_')
+              .replace(/^_|_$/g, '')
+              .slice(0, 80);
+          }
+
+          async function highlightedViewport(page, selector, filename) {
+            await page.locator(selector).first().scrollIntoViewIfNeeded({
+              timeout: 1000,
+            });
+            await page.evaluate((sel) => {
+              const el = document.querySelector(sel);
+              if (!el) return;
+              el.dataset._a11yPrevOutline = el.style.outline;
+              el.dataset._a11yPrevBoxShadow = el.style.boxShadow;
+              el.style.outline = '3px solid red';
+              el.style.boxShadow = '0 0 0 3px rgba(255,0,0,0.3)';
+            }, selector);
+
+            await page.screenshot({ path: filename, animations: 'disabled' });
+
+            await page.evaluate((sel) => {
+              const el = document.querySelector(sel);
+              if (!el) return;
+              el.style.outline = el.dataset._a11yPrevOutline || '';
+              el.style.boxShadow = el.dataset._a11yPrevBoxShadow || '';
+              delete el.dataset._a11yPrevOutline;
+              delete el.dataset._a11yPrevBoxShadow;
+            }, selector);
+          }
+
+          (async () => {
+            const browser = await chromium.launch();
+            const context = await browser.newContext({
+              ignoreHTTPSErrors: true,
+              userAgent: 'rtc-qe-github-action',
+            });
+            const urls = process.env.TEST_URLS.split(',');
+
+            const allResults = [];
+            const timedOutUrls = [];
+
+            fs.mkdirSync('screenshots', { recursive: true });
+
+            for (const rawUrl of urls) {
+              const url = rawUrl.trim();
+              if (!url) continue;
+
+              console.log(`\nAxe testing: ${url}`);
+              const page = await context.newPage();
+
+              try {
+                await page.goto(url, { waitUntil: 'load', timeout: 30000 });
+
+                const results = await new AxeBuilder({ page }).analyze();
+
+                for (const violation of results.violations) {
+                  for (const [nodeIndex, node] of violation.nodes.entries()) {
+                    const selector = Array.isArray(node.target)
+                      ? node.target[node.target.length - 1]
+                      : node.target;
+
+                    // File pattern: axe__<ruleId>__<safe-url>__<node-index>__<safe-selector>.png
+                    const filename = [
+                      'screenshots',
+                      `axe__${safeSegment(violation.id)}__${safeSegment(url)}__node-${nodeIndex + 1}__${safeSegment(selector)}.png`,
+                    ].join('/');
+
+                    node.screenshotPath = filename;
+
+                    try {
+                      await highlightedViewport(page, selector, filename);
+                      console.log(`[screenshot] ${violation.id} > ${filename}`);
+                    } catch {
+                      // If element screenshot fails (due to animation, obscured element, etd),
+                      // fallback to full viewport screenshot to at least capture the issue in context.
+                      await page.screenshot({ path: filename });
+                      console.log(`[screenshot] ${violation.id} > ${filename} (fallback: viewport)`);
+                    }
+                  }
+                }
+
+                allResults.push({ url, violations: results.violations, passes: results.passes, skipped: false });
+                const vCount = results.violations.length;
+                console.log(vCount > 0 ? `❌ ${vCount} violations` : '✅ No violations');
+              } catch (error) {
+                console.log(`⚠️ Skipped ${url}: ${error.message}`);
+                timedOutUrls.push({ url, error: error.message });
+                allResults.push({ url, violations: [], passes: [], error: error.message, skipped: true });
+              } finally {
+                await page.close();
+              }
+            }
+
+            if (timedOutUrls.length > 0) {
+              console.log(`\n⚠️ ${timedOutUrls.length} URL(s) skipped due to errors:`);
+              timedOutUrls.forEach(t => console.log(` - ${t.url}: ${t.error}`));
+            }
+
+            fs.writeFileSync('axe-results.json', JSON.stringify(allResults, null, 2));
+            console.log('\naxe-results.json written');
+            await browser.close();
+          })();
+          EOF
+
+          TEST_URLS="$(cat resolved-urls.txt)" node axe-test.js
+
+      - name: Run Lighthouse
+        run: |
+          mkdir -p lighthouse-reports
+          IFS=',' read -ra URL_ARRAY <<< "$(cat resolved-urls.txt)"
+
+          for url in "${URL_ARRAY[@]}"; do
+            url_trimmed=$(echo "$url" | xargs)
+            safe_name=$(echo "$url_trimmed" | sed 's/[^a-zA-Z0-9]/_/g')
+
+            echo "Lighthouse: $url_trimmed"
+
+            npx lighthouse "$url_trimmed" \
+              --chrome-path="$CHROME_PATH" \
+              --only-categories=accessibility \
+              --chrome-flags="--headless" \
+              --output=json \
+              --output-path="lighthouse-reports/$safe_name.json" || true
+
+            if [ ! -f "lighthouse-reports/$safe_name.json" ]; then
+              echo "Lighthouse failed to produce a report"
+              exit 1
+            fi
+
+            score=$(node -e "
+              const r = require('./lighthouse-reports/$safe_name.json');
+              console.log(Math.round(r.categories.accessibility.score * 100));
+            ")
+
+            if   [ "$score" -ge 90 ]; then icon="🟢 Pass"
+            elif [ "$score" -ge 50 ]; then icon="🟡 Needs Improvement"
+            else                           icon="🔴 Critical Fail"
+            fi
+
+            echo "$icon — Score: $score / 100"
+            echo "----------------------------------"
+          done
+
+      - name: Create Pa11y config
+        run: |
+          cat > pa11y.json << 'EOF'
+          {
+            "chromeLaunchConfig": {
+              "args": ["--no-sandbox", "--disable-setuid-sandbox"]
+            }
+          }
+          EOF
+
+      - name: Run Pa11y
+        run: |
+          IFS=',' read -ra URL_ARRAY <<< "$(cat resolved-urls.txt)"
+          mkdir -p pa11y-raw
+          idx=0
+
+          for url in "${URL_ARRAY[@]}"; do
+            url_trimmed=$(echo "$url" | xargs)
+            echo "Pa11y: $url_trimmed"
+
+            pa11y "$url_trimmed" \
+              --standard WCAG2AA \
+              --reporter json \
+              --config ./pa11y.json \
+              > "pa11y-raw/${idx}.json" || [ $? -eq 2 ]
+
+            node -e "
+              const fs = require('fs');
+              const file = process.argv[1];
+              let issues = [];
+              try {
+                const raw = fs.readFileSync(file, 'utf8').trim();
+                if (raw) issues = JSON.parse(raw);
+                if (!Array.isArray(issues)) issues = [];
+              } catch(e) {}
+              fs.writeFileSync(file, JSON.stringify(issues));
+            " "pa11y-raw/${idx}.json"
+
+            issue_count=$(node -e "
+              const fs = require('fs');
+              try { console.log(JSON.parse(fs.readFileSync(process.argv[1], 'utf8')).length); }
+              catch { console.log(0); }
+            " "pa11y-raw/${idx}.json")
+            echo "$issue_count issue(s) found"
+            echo "----------------------------------"
+
+            echo "$url_trimmed" > "pa11y-raw/${idx}.url"
+            idx=$((idx + 1))
+          done
+
+          node -e "
+            const fs = require('fs');
+            const dir = 'pa11y-raw';
+            const results = [];
+            const jsonFiles = fs.readdirSync(dir)
+              .filter(f => f.endsWith('.json'))
+              .sort((a, b) => parseInt(a) - parseInt(b));
+            for (const f of jsonFiles) {
+              const idx = f.replace('.json', '');
+              const urlFile = dir + '/' + idx + '.url';
+              const pageUrl = fs.existsSync(urlFile)
+                ? fs.readFileSync(urlFile, 'utf8').trim()
+                : 'unknown';
+              let issues = [];
+              try { issues = JSON.parse(fs.readFileSync(dir + '/' + f, 'utf8')); } catch {}
+              results.push({ pageUrl, issues });
+            }
+            fs.writeFileSync('pa11y-results.json', JSON.stringify(results, null, 2));
+            console.log('pa11y-results.json written (' + results.length + ' URL(s))');
+          "
+
+          cat << 'SSEOF' > pa11y-screenshots.js
+          const { chromium } = require('playwright');
+          const fs = require('fs');
+
+          function safeSegment(str) {
+            return String(str || '')
+              .replace(/[^a-zA-Z0-9.\-]/g, '_')
+              .replace(/_+/g, '_')
+              .replace(/^_|_$/g, '')
+              .slice(0, 80);
+          }
+
+          async function highlightedViewport(page, selector, filename) {
+            await page.locator(selector).first().scrollIntoViewIfNeeded({
+              timeout: 1000,
+            });
+            await page.evaluate((sel) => {
+              const el = document.querySelector(sel);
+              if (!el) return;
+              el.dataset._a11yPrevOutline   = el.style.outline;
+              el.dataset._a11yPrevBoxShadow = el.style.boxShadow;
+              el.style.outline   = '3px solid red';
+              el.style.boxShadow = '0 0 0 3px rgba(255,0,0,0.3)';
+            }, selector);
+            await page.screenshot({ path: filename, animations: 'disabled' });
+            await page.evaluate((sel) => {
+              const el = document.querySelector(sel);
+              if (!el) return;
+              el.style.outline   = el.dataset._a11yPrevOutline   || '';
+              el.style.boxShadow = el.dataset._a11yPrevBoxShadow || '';
+              delete el.dataset._a11yPrevOutline;
+              delete el.dataset._a11yPrevBoxShadow;
+            }, selector);
+          }
+
+          (async () => {
+            const pa11yResults = JSON.parse(fs.readFileSync('pa11y-results.json', 'utf8'));
+            const browser = await chromium.launch();
+            const context = await browser.newContext({
+              ignoreHTTPSErrors: true,
+              userAgent: 'rtc-qe-github-action',
+            });
+            const screenshotFailures = [];
+
+            fs.mkdirSync('screenshots', { recursive: true });
+
+            for (const result of pa11yResults) {
+              if (!result.issues || result.issues.length === 0) continue;
+
+              console.log(`\nScreenshotting Pa11y issues for: ${result.pageUrl}`);
+              const page = await context.newPage();
+
+              try {
+                await page.goto(result.pageUrl, { waitUntil: 'load', timeout: 30000 });
+
+                for (const [nodeIndex, issue] of result.issues.entries()) {
+                  // File pattern: pa11y__<issueCode>__<safe-url>__<node-index>__<safe-selector>.png
+                  const filename = [
+                    'screenshots',
+                    `pa11y__${safeSegment(issue.code)}__${safeSegment(result.pageUrl)}__node-${nodeIndex + 1}__${safeSegment(issue.selector)}.png`,
+                  ].join('/');
+
+                  issue.screenshotPath = filename;
+
+                  try {
+                    await highlightedViewport(page, issue.selector, filename);
+                    console.log(`[screenshot] ${issue.code} > ${filename}`);
+                  } catch {
+                    await page.screenshot({ path: filename });
+                    console.log(`[screenshot] ${issue.code} > ${filename} (fallback: viewport)`);
+                  }
+                }
+              } catch (error) {
+                console.log(`⚠️ Skipped screenshots for ${result.pageUrl}: ${error.message}`);
+                screenshotFailures.push({ url: result.pageUrl, error: error.message });
+                result.screenshotSkipped = true;
+                result.screenshotError = error.message;
+              } finally {
+                await page.close();
+              }
+            }
+
+            if (screenshotFailures.length > 0) {
+              console.log(`\n⚠️  ${screenshotFailures.length} page(s) skipped for screenshots:`);
+              screenshotFailures.forEach(f => console.log(` - ${f.url}: ${f.error}`));
+            }
+
+            fs.writeFileSync('pa11y-results.json', JSON.stringify(pa11yResults, null, 2));
+            console.log('\npa11y-results.json updated with screenshot paths');
+            await browser.close();
+          })();
+          SSEOF
+
+          node pa11y-screenshots.js
+
+      - name: Generate consolidated Markdown report
+        run: |
+          cat << 'SCRIPT' > generate-report.js
+          const fs = require('fs'), path = require('path');
+          function safeRead(f){try{return JSON.parse(fs.readFileSync(f,'utf8'));}catch{return null;}}
+          const axeRaw=safeRead('axe-results.json')||[], pa11yRaw=safeRead('pa11y-results.json')||[], lhDir='lighthouse-reports';
+          const allUrls=new Set([...axeRaw.map(r=>r.url),...pa11yRaw.map(r=>r.pageUrl)]);
+          const skippedPages = axeRaw.filter(r=>r.skipped).map(r=>({url:r.url,error:r.error}));
+          const screenshotFailures = pa11yRaw.filter(r=>r.screenshotSkipped).map(r=>({url:r.pageUrl,error:r.screenshotError}));
+          function normalizeHtml(h){return(h||'').replace(/\s+/g,' ').trim().slice(0,200);}
+          function mdEscape(s){return String(s||'').replace(/</g,'\\<').replace(/>/g,'\\>').replace(/\|/g,'\\|');}
+          const findings=new Map();
+          const passes=new Map();
+          function upsert(ruleId,description,impact,helpUrl,source,html,target,url,screenshotPath){
+            const key=ruleId;
+            if(!findings.has(key))findings.set(key,{ruleId,description,impact,helpUrl,sources:new Set(),nodes:[]});
+            const f=findings.get(key); f.sources.add(source);
+            if(!f.nodes.some(n=>n.url===url&&normalizeHtml(n.html)===normalizeHtml(html)))
+              f.nodes.push({html:html||'',target:target||'',url:url||'',screenshotPath:screenshotPath||null});
+          }
+          function upsertPass(ruleId,description,helpUrl,source){
+            if(!passes.has(ruleId))passes.set(ruleId,{ruleId,description,helpUrl,sources:new Set()});
+            passes.get(ruleId).sources.add(source);
+          }
+          for(const r of axeRaw){
+            for(const v of(r.violations||[]))for(const n of(v.nodes||[]))
+              upsert(v.id,v.help||v.description||'',v.impact||'unknown',v.helpUrl||'','axe',n.html,
+                Array.isArray(n.target)?n.target.join(', '):(n.target||''),r.url,n.screenshotPath||null);
+            for(const p of(r.passes||[]))
+              upsertPass(p.id,p.help||p.description||'',p.helpUrl||'','axe');
+          }
+          for(const r of pa11yRaw)for(const i of(r.issues||[]))
+            upsert(i.code,i.message||'',i.type==='error'?'serious':'minor','https://www.w3.org/TR/WCAG21/','pa11y',
+              i.context||'',i.selector||'',r.pageUrl,i.screenshotPath||null);
+          const impactOrder={critical:0,serious:1,moderate:2,minor:3,warning:4,unknown:5};
+          const allFindings=[...findings.values()].sort((a,b)=>(impactOrder[a.impact]??5)-(impactOrder[b.impact]??5));
+          const totalPasses=passes.size;
+          const lhScores={};
+          if(fs.existsSync(lhDir))for(const f of fs.readdirSync(lhDir)){
+            if(!f.endsWith('.json'))continue;
+            const lh=safeRead(path.join(lhDir,f)); if(!lh)continue;
+            lhScores[lh.finalUrl||lh.requestedUrl||f.replace('.json','')]=Math.round((lh.categories?.accessibility?.score??0)*100);
+          }
+          const sv=Object.values(lhScores), agg=sv.length?Math.round(sv.reduce((a,b)=>a+b,0)/sv.length):null;
+          const countByImpact={};
+          for(const f of allFindings)countByImpact[f.impact]=(countByImpact[f.impact]||0)+1;
+          const totalErrors=(countByImpact.critical||0)+(countByImpact.serious||0);
+          const totalWarnings=(countByImpact.moderate||0)+(countByImpact.minor||0)+(countByImpact.warning||0);
+          const EMOJI={critical:'🔴',serious:'🟠',moderate:'🟡',minor:'🟢',warning:'⚪',unknown:'⚫'};
+          function scoreLine(s){if(s===null)return'N/A';if(s>=90)return`${s}/100 🟢 Pass`;if(s>=50)return`${s}/100 🟡 Needs Improvement`;return`${s}/100 🔴 Critical Fail`;}
+          function fence(c){return'```\n'+String(c).replace(/`{3}/g,'\\`\\`\\`')+'\n```';}
+          const L=[];
+          L.push('# A11y Compliance Report','',
+            `> **Generated:** ${new Date().toUTCString()}  `,
+            `> **URLs audited:** ${allUrls.size}  `,
+            '> **Tools:** Axe-core · Pa11y · Lighthouse',
+            '','---','');
+          L.push('## Lighthouse Score');
+          L.push('',agg!==null?`**Overall (average):** ${scoreLine(agg)}`:'_No Lighthouse data found._','');
+          if(Object.keys(lhScores).length){
+            L.push('| URL | Score |','|-----|-------|');
+            for(const[u,s]of Object.entries(lhScores))L.push(`| ${u} | ${scoreLine(s)} |`);
+            L.push('');
+          }
+          L.push('> [Chrome Developer Scoring Documentation (Lighthouse)](https://developer.chrome.com/docs/lighthouse/accessibility/scoring)','','---','');
+          L.push('## Summary','',
+            '| Metric | Count |','|--------|-------|',
+            `| 🔴 Errors (critical + serious) | **${totalErrors}** |`,
+            `| 🟡 Warnings (moderate + minor) | **${totalWarnings}** |`,
+            `| ✅ Passes (axe-core, deduplicated) | **${totalPasses}** |`,
+            `| 🔵 Unique violations (deduplicated) | **${allFindings.length}** |`,
+            '','---','');
+          if(skippedPages.length>0||screenshotFailures.length>0){
+            L.push('## ⚠️ Scan Warnings','');
+            if(skippedPages.length>0){
+              L.push('### Pages Not Scanned','',
+                '_These pages could not be loaded during the Axe-core scan. Their accessibility was not evaluated._',
+                '');
+              for(const s of skippedPages)
+                L.push(`- **${s.url}** — ${mdEscape(s.error)}`);
+              L.push('');
+            }
+            if(screenshotFailures.length>0){
+              L.push('### Screenshots Unavailable','',
+                '_These pages were scanned successfully by Pa11y but could not be loaded again for screenshots._',
+                '');
+              for(const s of screenshotFailures)
+                L.push(`- **${s.url}** — ${mdEscape(s.error)}`);
+              L.push('');
+            }
+            L.push('---','');
+          }
+          L.push('> **Screenshots:** Viewport screenshots with the violating element highlighted in red are in the `a11y-screenshots` artifact.',
+            '>',
+            '> Filenames follow the pattern: `<tool>__<ruleId>__<url>__<node-index>__<selector>.png`',
+            '','---','');
+          L.push('## Findings');
+          if(allFindings.length===0){
+            L.push('','✅ **No violations found across all tools.**','');
+          } else {
+            for(const f of allFindings){
+              L.push('<details>');
+              L.push(`<summary><strong>${EMOJI[f.impact]||'⚫'} <code>${f.ruleId}</code></strong> <em>(${f.impact})</em></summary>`,'');
+              L.push('| Field | Value |','|-------|-------|',
+                `| **Impact** | ${f.impact} |`,
+                `| **Source(s)** | ${[...f.sources].join(', ')} |`,
+                `| **Description** | ${mdEscape(f.description)} |`);
+              if(f.helpUrl)L.push(`| **Reference** | [More info](${f.helpUrl}) |`);
+              L.push('',`**Affected elements** (${f.nodes.length}):`);
+              for(const[i,n]of f.nodes.entries()){
+                L.push('');
+                if(n.url)    L.push(`_URL:_ ${n.url}`,'');
+                if(n.target) L.push(`_Target ${i+1}:_ \`${n.target}\``);
+                if(n.html)   L.push(fence(n.html));
+                if(n.screenshotPath)
+                  L.push('',`Screenshot: \`${path.basename(n.screenshotPath)}\``);
+              }
+              L.push('','</details>','');
+            }
+          }
+          fs.mkdirSync('a11y-report',{recursive:true});
+          fs.writeFileSync('a11y-report/report.md',L.join('\n'),'utf8');
+          console.log('✅ Report written - a11y-report/report.md');
+          console.log(`   Unique violations : ${allFindings.length}`);
+          console.log(`   Errors            : ${totalErrors}`);
+          console.log(`   Warnings          : ${totalWarnings}`);
+          console.log(`   Passes            : ${totalPasses}`);
+          if(agg!==null)console.log(`   Lighthouse Score  : ${scoreLine(agg)}`);
+          SCRIPT
+
+          node generate-report.js
+
+      - name: Generate HTML report
+        run: |
+          cat << 'SCRIPT' > generate-html-report.js
+          const fs = require('fs'), path = require('path');
+          function safeRead(f){try{return JSON.parse(fs.readFileSync(f,'utf8'));}catch{return null;}}
+          function htmlEscape(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+          function normalizeHtml(h){return(h||'').replace(/\s+/g,' ').trim().slice(0,200);}
+          function embedImage(p){if(!p)return null;try{const b=fs.readFileSync(path.resolve(p));return`data:image/png;base64,${b.toString('base64')}`;}catch{return null;}}
+          const axeRaw=safeRead('axe-results.json')||[], pa11yRaw=safeRead('pa11y-results.json')||[], lhDir='lighthouse-reports';
+          const allUrls=new Set([...axeRaw.map(r=>r.url),...pa11yRaw.map(r=>r.pageUrl)]);
+          const skippedPages=axeRaw.filter(r=>r.skipped).map(r=>({url:r.url,error:r.error||'Unknown error'}));
+          const screenshotFailures=pa11yRaw.filter(r=>r.screenshotSkipped).map(r=>({url:r.pageUrl,error:r.screenshotError||'Unknown error'}));
+          const findings=new Map(), passes=new Map();
+          function upsert(ruleId,description,impact,helpUrl,source,html,target,url,screenshotPath){
+            if(!findings.has(ruleId))findings.set(ruleId,{ruleId,description,impact,helpUrl,sources:new Set(),nodes:[]});
+            const f=findings.get(ruleId); f.sources.add(source);
+            if(!f.nodes.some(n=>n.url===url&&normalizeHtml(n.html)===normalizeHtml(html)))
+              f.nodes.push({html:html||'',target:target||'',url:url||'',screenshotPath:screenshotPath||null});
+          }
+          function upsertPass(ruleId,description,helpUrl,source){
+            if(!passes.has(ruleId))passes.set(ruleId,{ruleId,description,helpUrl,sources:new Set()});
+            passes.get(ruleId).sources.add(source);
+          }
+          for(const r of axeRaw){
+            for(const v of(r.violations||[]))for(const n of(v.nodes||[]))
+              upsert(v.id,v.help||v.description||'',v.impact||'unknown',v.helpUrl||'','axe',n.html,
+                Array.isArray(n.target)?n.target.join(', '):(n.target||''),r.url,n.screenshotPath||null);
+            for(const p of(r.passes||[]))upsertPass(p.id,p.help||p.description||'',p.helpUrl||'','axe');
+          }
+          for(const r of pa11yRaw)for(const i of(r.issues||[]))
+            upsert(i.code,i.message||'',i.type==='error'?'serious':'minor','https://www.w3.org/TR/WCAG21/','pa11y',
+              i.context||'',i.selector||'',r.pageUrl,i.screenshotPath||null);
+          const impactOrder={critical:0,serious:1,moderate:2,minor:3,warning:4,unknown:5};
+          const allFindings=[...findings.values()].sort((a,b)=>(impactOrder[a.impact]??5)-(impactOrder[b.impact]??5));
+          const totalPasses=passes.size;
+          const lhScores={};
+          if(fs.existsSync(lhDir))for(const f of fs.readdirSync(lhDir)){
+            if(!f.endsWith('.json'))continue;
+            const lh=safeRead(path.join(lhDir,f)); if(!lh)continue;
+            lhScores[lh.finalUrl||lh.requestedUrl||f.replace('.json','')]=Math.round((lh.categories?.accessibility?.score??0)*100);
+          }
+          const sv=Object.values(lhScores), agg=sv.length?Math.round(sv.reduce((a,b)=>a+b,0)/sv.length):null;
+          const countByImpact={};
+          for(const f of allFindings)countByImpact[f.impact]=(countByImpact[f.impact]||0)+1;
+          const totalErrors=(countByImpact.critical||0)+(countByImpact.serious||0);
+          const totalWarnings=(countByImpact.moderate||0)+(countByImpact.minor||0)+(countByImpact.warning||0);
+          const IMPACT_COLOR={critical:'#c0392b',serious:'#e67e22',moderate:'#f39c12',minor:'#27ae60',warning:'#95a5a6',unknown:'#7f8c8d'};
+          const IMPACT_EMOJI={critical:'🔴',serious:'🟠',moderate:'🟡',minor:'🟢',warning:'⚪',unknown:'⚫'};
+          function impactBadge(impact){const c=IMPACT_COLOR[impact]||'#7f8c8d',e=IMPACT_EMOJI[impact]||'⚫';return`<span class="badge" style="background:${c}">${e} ${htmlEscape(impact)}</span>`;}
+          function scoreLine(s){if(s===null)return{text:'N/A',cls:'score-na'};if(s>=90)return{text:`${s}/100`,cls:'score-pass'};if(s>=50)return{text:`${s}/100`,cls:'score-warn'};return{text:`${s}/100`,cls:'score-fail'};}
+          function findingCards(){
+            if(!allFindings.length)return'<p class="no-findings">✅ No violations found across all tools.</p>';
+            return allFindings.map(f=>{
+              const color=IMPACT_COLOR[f.impact]||'#7f8c8d';
+              const nodeHtml=f.nodes.map((n,i)=>{
+                const dataUri=embedImage(n.screenshotPath);
+                const imgTag=dataUri?`<figure class="screenshot"><img src="${dataUri}" alt="Screenshot for ${htmlEscape(n.url)}" loading="lazy"/><figcaption>${htmlEscape(path.basename(n.screenshotPath))}</figcaption></figure>`:'';
+                return`<div class="node-item"><div class="node-meta"><span class="node-index">#${i+1}</span>${n.url?`<a href="${htmlEscape(n.url)}" target="_blank" rel="noopener">${htmlEscape(n.url)}</a>`:''}</div>${n.target?`<p class="node-target"><strong>Target:</strong> <code>${htmlEscape(n.target)}</code></p>`:''}${n.html?`<pre class="code-block"><code>${htmlEscape(n.html)}</code></pre>`:''}${imgTag}</div>`;
+              }).join('');
+              return`<details class="finding-card" style="--impact-color:${color}"><summary class="finding-summary"><span class="finding-title">${IMPACT_EMOJI[f.impact]||'⚫'} <code class="rule-id">${htmlEscape(f.ruleId)}</code></span>${impactBadge(f.impact)}<span class="finding-sources">${[...f.sources].map(htmlEscape).join(', ')}</span><span class="finding-count">${f.nodes.length} element${f.nodes.length!==1?'s':''}</span></summary><div class="finding-body"><table class="meta-table"><tr><th>Impact</th><td>${impactBadge(f.impact)}</td></tr><tr><th>Source(s)</th><td>${[...f.sources].map(htmlEscape).join(', ')}</td></tr><tr><th>Description</th><td>${htmlEscape(f.description)}</td></tr>${f.helpUrl?`<tr><th>Reference</th><td><a href="${htmlEscape(f.helpUrl)}" target="_blank" rel="noopener">More info ↗</a></td></tr>`:''}</table><h4 class="nodes-heading">Affected elements (${f.nodes.length})</h4><div class="node-list">${nodeHtml}</div></div></details>`;
+            }).join('\n');
+          }
+          function lhTable(){
+            if(!Object.keys(lhScores).length)return'<p><em>No Lighthouse data found.</em></p>';
+            const rows=Object.entries(lhScores).map(([u,s])=>{const{text,cls}=scoreLine(s);return`<tr><td><a href="${htmlEscape(u)}" target="_blank" rel="noopener">${htmlEscape(u)}</a></td><td class="${cls}">${text}</td></tr>`;}).join('');
+            return`<table class="lh-table"><thead><tr><th>URL</th><th>Score</th></tr></thead><tbody>${rows}</tbody></table>`;
+          }
+          function warnSection(){
+            if(!skippedPages.length&&!screenshotFailures.length)return'';
+            const sp=skippedPages.map(s=>`<li><strong>${htmlEscape(s.url)}</strong> — ${htmlEscape(s.error)}</li>`).join('');
+            const sf=screenshotFailures.map(s=>`<li><strong>${htmlEscape(s.url)}</strong> — ${htmlEscape(s.error)}</li>`).join('');
+            return`<section class="warn-section"><h2>⚠️ Scan Warnings</h2>${skippedPages.length?`<h3>Pages Not Scanned</h3><p>These pages could not be loaded during the Axe-core scan.</p><ul>${sp}</ul>`:''}${screenshotFailures.length?`<h3>Screenshots Unavailable</h3><p>These pages were scanned by Pa11y but could not be loaded for screenshots.</p><ul>${sf}</ul>`:''}</section>`;
+          }
+          const aggScore=scoreLine(agg);
+          const generatedAt=new Date().toUTCString();
+          const html=`<!DOCTYPE html>
+          <html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+          <title>A11y Compliance Report</title><style>
+          *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+          :root{--bg:#0f1117;--surface:#1a1d27;--surface2:#22263a;--border:#2e3250;--text:#e2e8f0;--muted:#8892a4;--accent:#6c8fff;--pass:#22c55e;--warn:#f59e0b;--fail:#ef4444;--radius:10px;--mono:'JetBrains Mono','Fira Code',monospace}
+          body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;font-size:15px;line-height:1.6;padding:0 0 4rem}
+          a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+          .report-header{background:linear-gradient(135deg,#141828 0%,#1e2540 100%);border-bottom:1px solid var(--border);padding:2.5rem 2rem 2rem}
+          .report-header h1{font-size:1.75rem;font-weight:700;letter-spacing:-.02em;margin-bottom:.5rem}
+          .report-header .meta{color:var(--muted);font-size:.85rem;display:flex;flex-wrap:wrap;gap:.5rem 1.5rem}
+          .container{max-width:1100px;margin:0 auto;padding:0 1.5rem}
+          section{margin-top:2.5rem}
+          h2{font-size:1.2rem;font-weight:600;border-bottom:1px solid var(--border);padding-bottom:.5rem;margin-bottom:1rem}
+          h3{font-size:1rem;font-weight:600;margin:1rem 0 .4rem}h4{font-size:.9rem;font-weight:600;margin:1rem 0 .4rem;color:var(--muted)}
+          .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1rem;margin-top:1rem}
+          .stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1.1rem 1.2rem}
+          .stat-card .stat-label{font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+          .stat-card .stat-value{font-size:2rem;font-weight:700;line-height:1.1;margin-top:.2rem}
+          .stat-card .stat-value.red{color:var(--fail)}.stat-card .stat-value.gold{color:var(--warn)}.stat-card .stat-value.grn{color:var(--pass)}.stat-card .stat-value.blue{color:var(--accent)}
+          .lh-agg{font-size:2.2rem;font-weight:700;margin:.5rem 0 1rem}
+          .score-pass{color:var(--pass)}.score-warn{color:var(--warn)}.score-fail{color:var(--fail)}.score-na{color:var(--muted)}
+          .lh-table{width:100%;border-collapse:collapse;font-size:.9rem}.lh-table th,.lh-table td{padding:.55rem .8rem;border:1px solid var(--border);text-align:left}.lh-table th{background:var(--surface2);color:var(--muted);font-weight:600}.lh-table tr:nth-child(even) td{background:var(--surface)}
+          .meta-table{width:100%;border-collapse:collapse;font-size:.9rem}.meta-table th,.meta-table td{padding:.45rem .75rem;border:1px solid var(--border);text-align:left;vertical-align:top}.meta-table th{background:var(--surface2);color:var(--muted);font-weight:600;white-space:nowrap;width:140px}
+          .warn-section{background:#2a1a0a;border:1px solid #5a3a10;border-radius:var(--radius);padding:1.25rem 1.5rem;margin-top:2.5rem}.warn-section h2{border-color:#5a3a10}.warn-section ul{padding-left:1.25rem}.warn-section li{margin:.35rem 0;font-size:.88rem}
+          .findings-list{display:flex;flex-direction:column;gap:.75rem;margin-top:1rem}
+          .finding-card{background:var(--surface);border:1px solid var(--border);border-left:4px solid var(--impact-color,#7f8c8d);border-radius:var(--radius);overflow:hidden}
+          .finding-summary{display:flex;align-items:center;gap:.75rem;padding:.85rem 1.1rem;cursor:pointer;list-style:none;flex-wrap:wrap}
+          .finding-summary::-webkit-details-marker{display:none}.finding-summary::before{content:'▶';font-size:.7rem;color:var(--muted);transition:transform .15s;flex-shrink:0}
+          details[open]>.finding-summary::before{transform:rotate(90deg)}
+          .finding-title{font-weight:600;flex:1;min-width:0}.rule-id{font-family:var(--mono);font-size:.85rem}
+          .finding-sources{font-size:.78rem;color:var(--muted)}.finding-count{font-size:.78rem;color:var(--muted);margin-left:auto;white-space:nowrap}
+          .badge{display:inline-block;padding:.15rem .55rem;border-radius:4px;font-size:.72rem;font-weight:700;color:#fff;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap}
+          .finding-body{padding:1rem 1.25rem 1.25rem;border-top:1px solid var(--border)}
+          .nodes-heading{margin-top:1.25rem}
+          .node-list{display:flex;flex-direction:column;gap:1rem;margin-top:.6rem}
+          .node-item{background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:.85rem 1rem}
+          .node-meta{display:flex;align-items:center;gap:.6rem;margin-bottom:.4rem;font-size:.85rem;flex-wrap:wrap}
+          .node-index{background:var(--border);color:var(--muted);border-radius:4px;padding:.1rem .4rem;font-size:.72rem;font-weight:700;flex-shrink:0}
+          .node-target{font-size:.82rem;margin:.35rem 0}
+          .code-block{background:#0a0c14;border:1px solid var(--border);border-radius:6px;padding:.7rem 1rem;overflow-x:auto;font-family:var(--mono);font-size:.78rem;line-height:1.5;white-space:pre-wrap;word-break:break-all;margin:.5rem 0}
+          .screenshot{margin:.75rem 0 0}.screenshot img{max-width:100%;border:2px solid #c0392b;border-radius:6px;display:block}.screenshot figcaption{font-size:.72rem;color:var(--muted);font-family:var(--mono);margin-top:.3rem}
+          .no-findings{background:#0f2d1a;border:1px solid #166534;border-radius:var(--radius);padding:1.25rem 1.5rem;color:var(--pass);font-weight:600}
+          .report-footer{margin-top:3rem;border-top:1px solid var(--border);padding-top:1rem;font-size:.78rem;color:var(--muted);text-align:center}
+          @media(max-width:640px){.stat-grid{grid-template-columns:repeat(2,1fr)}.finding-count{margin-left:0}}
+          @media(prefers-reduced-motion:reduce){.finding-summary::before{transition:none}}
+          </style></head><body>
+          <header class="report-header"><div class="container">
+          <h1>A11y Compliance Report</h1>
+          <div class="meta">
+          <span>${allUrls.size} URL${allUrls.size!==1?'s':''} audited</span>
+          <span>${htmlEscape(generatedAt)}</span>
+          </div></div></header>
+          <div class="container">
+          <section><h2>Summary</h2><div class="stat-grid">
+          <div class="stat-card"><div class="stat-label">🔴 Errors</div><div class="stat-value red">${totalErrors}</div></div>
+          <div class="stat-card"><div class="stat-label">🟡 Warnings</div><div class="stat-value gold">${totalWarnings}</div></div>
+          <div class="stat-card"><div class="stat-label">✅ Passes</div><div class="stat-value grn">${totalPasses}</div></div>
+          <div class="stat-card"><div class="stat-label">🔵 Unique violations</div><div class="stat-value blue">${allFindings.length}</div></div>
+          </div></section>
+          <section><h2>Lighthouse Accessibility Score</h2>
+          ${agg!==null?`<div class="lh-agg ${aggScore.cls}">${aggScore.text} <small style="font-size:1rem;font-weight:400;color:var(--muted)">avg across ${sv.length} page${sv.length!==1?'s':''}</small></div>`:'<p><em>No Lighthouse data found.</em></p>'}
+          ${lhTable()}
+          <p style="margin-top:.6rem;font-size:.8rem;color:var(--muted)"><a href="https://developer.chrome.com/docs/lighthouse/accessibility/scoring" target="_blank" rel="noopener">Chrome Developer Scoring Documentation ↗</a></p>
+          </section>
+          ${warnSection()}
+          <section><h2>Findings (${allFindings.length} unique violation${allFindings.length!==1?'s':''})</h2>
+          <p style="font-size:.85rem;color:var(--muted);margin-bottom:.75rem">Screenshots are embedded directly — no external artifacts needed. Violating elements are highlighted with a red border.</p>
+          <div class="findings-list">${findingCards()}</div></section>
+          </div>
+          <footer class="report-footer"><div class="container">Generated by Axe-core · Pa11y · Lighthouse &nbsp;|&nbsp; ${htmlEscape(generatedAt)}</div></footer>
+          </body></html>`;
+          fs.mkdirSync('a11y-report',{recursive:true});
+          fs.writeFileSync('a11y-report/report.html',html,'utf8');
+          const embedded=allFindings.flatMap(f=>f.nodes).filter(n=>{if(!n.screenshotPath)return false;try{fs.accessSync(n.screenshotPath);return true;}catch{return false;}}).length;
+          console.log('✅ HTML report written — a11y-report/report.html');
+          console.log(`   Unique violations : ${allFindings.length}`);
+          console.log(`   Errors            : ${totalErrors}`);
+          console.log(`   Warnings          : ${totalWarnings}`);
+          console.log(`   Passes            : ${totalPasses}`);
+          console.log(`   Screenshots embed : ${embedded}`);
+          if(agg!==null)console.log(`   Lighthouse Score  : ${aggScore.text}`);
+          SCRIPT
+
+          node generate-html-report.js
+
+      - name: Upload A11y Report
+        uses: actions/upload-artifact@v6
+        with:
+          name: a11y-compliance-report
+          path: a11y-report/report.md
+
+      - name: Upload HTML Report
+        uses: actions/upload-artifact@v6
+        with:
+          name: a11y-html-report
+          path: a11y-report/report.html
+
+      - name: Upload Screenshots
+        uses: actions/upload-artifact@v6
+        with:
+          name: a11y-screenshots
+          path: screenshots/
+
+      - name: Create GitHub Issue
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+
+            const LIMIT       = 65536;
+            const REPORT_FILE = 'a11y-report/report.md';
+            const BASE_URL    = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}`;
+            const RUN_URL     = `${BASE_URL}/actions/runs/${context.runId}`;
+            const URLS        = fs.readFileSync('resolved-urls.txt', 'utf8').trim();
+            const DATE        = new Date().toUTCString();
+
+            const { data: { artifacts } } = await github.rest.actions.listWorkflowRunArtifacts({
+              owner:  context.repo.owner,
+              repo:   context.repo.repo,
+              run_id: context.runId,
+            });
+
+            const artifactUrl = (name) => {
+              const match = artifacts.find(a => a.name === name);
+              return match
+                ? `${BASE_URL}/actions/runs/${context.runId}/artifacts/${match.id}`
+                : RUN_URL;
+            };
+
+            const reportUrl      = artifactUrl('a11y-compliance-report');
+            const screenshotsUrl = artifactUrl('a11y-screenshots');
+            const htmlReportUrl  = artifactUrl('a11y-html-report');
+
+            let body = fs.readFileSync(REPORT_FILE, 'utf8');
+
+            body = body.replace(
+              '`a11y-screenshots` artifact',
+              `[\`a11y-screenshots\`](${screenshotsUrl}) artifact`
+            );
+
+            body += [
+              '',
+              '---',
+              '',
+              `> **Self-contained HTML report** (screenshots embedded): [Download](${htmlReportUrl})`,
+            ].join('\n');
+
+            body += [
+              '',
+              `> **Workflow run:** [View on GitHub Actions](${RUN_URL})`,
+            ].join('\n');
+
+            // Just show the summary with direct artifact links
+            // if the GH issue body limit is exceeded (65,536 characters).
+            if (body.length > LIMIT) {
+              const summaryStart = body.indexOf('## Summary');
+              const summaryEnd   = body.indexOf('\n---', summaryStart);
+              const summary      = summaryStart !== -1
+                ? body.slice(summaryStart, summaryEnd !== -1 ? summaryEnd : summaryStart + 2000)
+                : '_Summary not available._';
+
+              body = [
+                '# A11y Compliance Report',
+                '',
+                `> **Generated:** ${DATE}  `,
+                `> **URLs audited:** ${URLS.split(',').length}  `,
+                '',
+                '> ⚠️ The full report exceeds GitHub\'s issue body limit.',
+                '> Download the artifacts directly:',
+                `> - [Full report](${reportUrl})`,
+                `> - [Self-contained HTML report](${htmlReportUrl})`,
+                `> - [Element screenshots](${screenshotsUrl})`,
+                '',
+                '---',
+                '',
+                summary,
+                '',
+                '---',
+                '',
+                '_Full findings and element screenshots are available in the artifacts linked above._',
+                '',
+                `> **Workflow run:** [View on GitHub Actions](${RUN_URL})`,
+              ].join('\n');
+            }
+
+            await github.rest.issues.create({
+              owner:  context.repo.owner,
+              repo:   context.repo.repo,
+              title:  `A11y Audit - ${DATE}`,
+              body,
+              labels: ['accessibility'],
+            });

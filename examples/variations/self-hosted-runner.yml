@@ -152,15 +152,20 @@ jobs:
 
       - name: Install deps
         run: |
+          mkdir -p /tmp/a11y-runner
+          cd /tmp/a11y-runner
           npm init -y
           npm install playwright @axe-core/playwright lighthouse
           npm install -g pa11y
 
       - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
+        run: |
+          cd /tmp/a11y-runner
+          npx playwright install --with-deps chromium
 
       - name: Get Playwright Chromium path
         run: |
+          cd /tmp/a11y-runner
           CHROME=$(node -e "const { chromium } = require('playwright'); console.log(chromium.executablePath())")
           echo "CHROME_PATH=$CHROME" >> $GITHUB_ENV
           echo "Using $CHROME"
@@ -279,6 +284,7 @@ jobs:
           })();
           EOF
 
+          NODE_PATH=/tmp/a11y-runner/node_modules \
           TEST_URLS="$(cat resolved-urls.txt)" node axe-test.js
 
       - name: Run Lighthouse
@@ -292,10 +298,10 @@ jobs:
 
             echo "Lighthouse: $url_trimmed"
 
-            npx lighthouse "$url_trimmed" \
+            /tmp/a11y-runner/node_modules/.bin/lighthouse "$url_trimmed" \
               --chrome-path="$CHROME_PATH" \
               --only-categories=accessibility \
-              --chrome-flags="--headless" \
+              --chrome-flags="--headless --no-sandbox --disable-dev-shm-usage --disable-gpu" \
               --output=json \
               --output-path="lighthouse-reports/$safe_name.json" || true
 
@@ -482,6 +488,7 @@ jobs:
           })();
           SSEOF
 
+          NODE_PATH=/tmp/a11y-runner/node_modules \
           node pa11y-screenshots.js
 
       - name: Generate consolidated Markdown report

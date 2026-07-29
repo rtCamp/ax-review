@@ -64,6 +64,7 @@ jobs:
     permissions:
       issues: write
       contents: read
+      actions: read
 
     steps:
       - name: Checkout repo
@@ -214,8 +215,9 @@ jobs:
           }
 
           async function highlightedViewport(page, selector, filename) {
-            await page.locator(selector).first().scrollIntoViewIfNeeded();
-
+            await page.locator(selector).first().scrollIntoViewIfNeeded({
+              timeout: 1000,
+            });
             await page.evaluate((sel) => {
               const el = document.querySelector(sel);
               if (!el) return;
@@ -239,7 +241,10 @@ jobs:
 
           (async () => {
             const browser = await chromium.launch();
-            const context = await browser.newContext({ ignoreHTTPSErrors: true });
+            const context = await browser.newContext({
+              ignoreHTTPSErrors: true,
+              userAgent: 'rtc-qe-github-action',
+            });
             const urls = process.env.TEST_URLS.split(',');
 
             const allResults = [];
@@ -325,7 +330,12 @@ jobs:
               --only-categories=accessibility \
               --chrome-flags="--headless" \
               --output=json \
-              --output-path="lighthouse-reports/$safe_name.json"
+              --output-path="lighthouse-reports/$safe_name.json" || true
+
+            if [ ! -f "lighthouse-reports/$safe_name.json" ]; then
+              echo "Lighthouse failed to produce a report"
+              exit 1
+            fi
 
             score=$(node -e "
               const r = require('./lighthouse-reports/$safe_name.json');
@@ -425,7 +435,9 @@ jobs:
           }
 
           async function highlightedViewport(page, selector, filename) {
-            await page.locator(selector).first().scrollIntoViewIfNeeded();
+            await page.locator(selector).first().scrollIntoViewIfNeeded({
+              timeout: 1000,
+            });
             await page.evaluate((sel) => {
               const el = document.querySelector(sel);
               if (!el) return;
@@ -448,7 +460,10 @@ jobs:
           (async () => {
             const pa11yResults = JSON.parse(fs.readFileSync('pa11y-results.json', 'utf8'));
             const browser = await chromium.launch();
-            const context = await browser.newContext({ ignoreHTTPSErrors: true });
+            const context = await browser.newContext({
+              ignoreHTTPSErrors: true,
+              userAgent: 'rtc-qe-github-action',
+            });
             const screenshotFailures = [];
 
             fs.mkdirSync('screenshots', { recursive: true });
@@ -519,7 +534,7 @@ jobs:
             const key=ruleId;
             if(!findings.has(key))findings.set(key,{ruleId,description,impact,helpUrl,sources:new Set(),nodes:[]});
             const f=findings.get(key); f.sources.add(source);
-            if(!f.nodes.some(n=>normalizeHtml(n.html)===normalizeHtml(html)))
+            if(!f.nodes.some(n=>n.url===url&&normalizeHtml(n.html)===normalizeHtml(html)))
               f.nodes.push({html:html||'',target:target||'',url:url||'',screenshotPath:screenshotPath||null});
           }
           function upsertPass(ruleId,description,helpUrl,source){
@@ -650,7 +665,7 @@ jobs:
           function upsert(ruleId,description,impact,helpUrl,source,html,target,url,screenshotPath){
             if(!findings.has(ruleId))findings.set(ruleId,{ruleId,description,impact,helpUrl,sources:new Set(),nodes:[]});
             const f=findings.get(ruleId); f.sources.add(source);
-            if(!f.nodes.some(n=>normalizeHtml(n.html)===normalizeHtml(html)))
+            if(!f.nodes.some(n=>n.url===url&&normalizeHtml(n.html)===normalizeHtml(html)))
               f.nodes.push({html:html||'',target:target||'',url:url||'',screenshotPath:screenshotPath||null});
           }
           function upsertPass(ruleId,description,helpUrl,source){

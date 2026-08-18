@@ -81,6 +81,20 @@ export interface OllamaConfig {
 }
 
 /**
+ * Configuration for OpenRouter provider.
+ */
+export interface OpenRouterConfig {
+  /** OpenRouter API key (required) */
+  apiKey: string;
+  /** Model slug (default: deepseek/deepseek-v4-pro) */
+  model?: string;
+  /** API base URL (default: https://openrouter.ai/api/v1) */
+  baseUrl?: string;
+  /** Request timeout in milliseconds (default: LLM_LIMITS.DEFAULT_TIMEOUT_MS) */
+  timeout?: number;
+}
+
+/**
  * Error class for LLM-specific errors.
  */
 export class LLMError extends Error {

@@ -23,10 +23,11 @@ import type { GitHubClient } from './github/client';
 import { redactSecrets } from './security/gitleaks';
 import { getSystemPrompt, buildUserPrompt } from './prompts/a11y-prompt';
 import { createBatches } from './utils/batching';
-import { fetchPRFiles, filterWebFiles, shouldSkipFile } from './github/pr';
+import { fetchPRFiles, filterWebFiles, shouldSkipFile, fetchIncrementalFiles } from './github/pr';
 import { countElementsInFiles, verifyCompleteness } from './utils/element-counter';
 import { logLLMUsage } from './utils/llm-usage';
 import { loadFindings } from './utils/findings';
+import { extractLastSha } from './utils/formatting';
 
 /**
  * Result from batch processing.
@@ -52,6 +53,12 @@ export interface AnalysisResult {
 
   /** Potential gaps detected during verification */
   verificationGaps?: string[];
+
+  /** The SHA used as the base of this analysis */
+  baseSha: string | null;
+
+  /* The existing summary comment fetched at the start of analysis */
+  existingComment: { id: number; body: string } | null;
 }
 
 /**
@@ -137,12 +144,30 @@ export interface AnalysisContext {
  * }
  */
 export async function analyzeFiles(context: AnalysisContext): Promise<AnalysisResult> {
-  const { github, llm, config, owner, repo, prNumber } = context;
+  const { github, llm, config, owner, repo, prNumber, headSha } = context;
 
-  // Step 1: Fetch PR files
-  core.info('Fetching PR files...');
-  const allFiles = await fetchPRFiles(github, prNumber, config.maxFiles);
-  core.info(`Found ${allFiles.length} files in PR (limit: ${config.maxFiles})`);
+  // Step 1: Determine analysis mode (incremental vs full PR diff)
+  core.info('Checking for existing analysis report...');
+  const existingComment = await github.findSummaryComment(prNumber);
+  const lastSha = existingComment ? extractLastSha(existingComment.body) : null;
+
+  let allFiles;
+  let baseSha: string | null = null;
+
+  if (lastSha && lastSha !== headSha) {
+    core.info(
+      `Incremental mode: analyzing commits \`${lastSha.slice(0, 7)}\` -> \`${headSha.slice(0, 7)}\``
+    );
+    allFiles = await fetchIncrementalFiles(github, lastSha, headSha, config.maxFiles);
+    baseSha = lastSha;
+  } else {
+    if (lastSha && lastSha === headSha) {
+      core.info('HEAD SHA unchanged since last analysis. Falling back to full PR diff.');
+    } else {
+      core.info('Full mode: no previous report found, analyzing complete PR diff.');
+    }
+    allFiles = await fetchPRFiles(github, prNumber, config.maxFiles);
+  }
 
   // Step 2: Filter to web files for accessibility analysis
   const filteredFiles = allFiles.filter(f => !shouldSkipFile(f));
@@ -155,6 +180,8 @@ export async function analyzeFiles(context: AnalysisContext): Promise<AnalysisRe
       failedBatches: [],
       totalBatches: 0,
       successfulBatches: 0,
+      baseSha,
+      existingComment,
     };
   }
 
@@ -173,6 +200,8 @@ export async function analyzeFiles(context: AnalysisContext): Promise<AnalysisRe
       failedBatches: [],
       totalBatches: 0,
       successfulBatches: 0,
+      baseSha,
+      existingComment,
     };
   }
 
@@ -225,7 +254,11 @@ export async function analyzeFiles(context: AnalysisContext): Promise<AnalysisRe
     core.info('Verification passed - element counts match reported issues');
   }
 
-  return result;
+  return {
+    ...result,
+    baseSha,
+    existingComment,
+  };
 }
 
 /**
@@ -264,7 +297,7 @@ async function processBatches(
   repo: string,
   prNumber: number,
   externalFindings?: string
-): Promise<AnalysisResult> {
+): Promise<Omit<AnalysisResult, 'baseSha' | 'existingComment'>> {
   const allIssues: A11yIssue[] = [];
   const failedBatches: FailedBatch[] = [];
 

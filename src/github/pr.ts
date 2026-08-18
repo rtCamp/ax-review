@@ -8,9 +8,9 @@
 import * as core from '@actions/core';
 import type { FilePatch } from '../types';
 import { GitHubClient } from './client';
-import { 
+import {
   shouldSkipFile as shouldSkipFilePattern,
-  filterFilesForAnalysis as filterFilesForAnalysisUtil 
+  filterFilesForAnalysis as filterFilesForAnalysisUtil
 } from '../utils/file-utils';
 
 /**
@@ -60,4 +60,31 @@ export function shouldSkipFile(file: FilePatch): boolean {
  */
 export function filterWebFiles(files: FilePatch[]): FilePatch[] {
   return filterFilesForAnalysisUtil(files);
+}
+
+/**
+ * Fetch only the files changed in commits between baseSha and headSha.
+ *
+ * @param client   - GitHub API client
+ * @param baseSha  - Last analyzed commit SHA (stored in ax-last-sha marker)
+ * @param headSha  - Current PR HEAD SHA
+ * @param maxFiles - Maximum number of files to analyze (0 = unlimited)
+ */
+export async function fetchIncrementalFiles(
+  client: GitHubClient,
+  baseSha: string,
+  headSha: string,
+  maxFiles: number
+): Promise<FilePatch[]> {
+  const allFiles = await client.compareCommits(baseSha, headSha);
+
+  if (maxFiles > 0 && allFiles.length > maxFiles) {
+    core.warning(
+      `Incremental diff has ${allFiles.length} files, but limit is ${maxFiles}. ` +
+      `Analyzing first ${maxFiles} files. Increase 'max-files' to analyze more.`
+    );
+    return allFiles.slice(0, maxFiles);
+  }
+
+  return allFiles;
 }

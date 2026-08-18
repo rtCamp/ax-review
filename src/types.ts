@@ -84,7 +84,7 @@ export type FileStatus = 'added' | 'modified' | 'removed' | 'renamed';
 /**
  * LLM provider options - hot-swappable via config.
  */
-export type LLMProvider = 'gemini' | 'ollama';
+export type LLMProvider = 'gemini' | 'ollama' | 'openrouter';
 
 /**
  * Output mode for posting results.

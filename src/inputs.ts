@@ -88,8 +88,8 @@ function getNumberInput(name: string, defaultValue: number): number {
 
 function parseLLMProvider(value: string): LLMProvider {
   const normalized = value.toLowerCase().trim();
-  if (normalized !== 'gemini' && normalized !== 'ollama') {
-    throw new Error(`Invalid llm-provider '${value}'. Must be 'gemini' or 'ollama'.`);
+  if (normalized !== 'gemini' && normalized !== 'ollama' && normalized !== 'openrouter') {
+    throw new Error(`Invalid llm-provider '${value}'. Must be 'gemini', 'ollama', or 'openrouter'.`);
   }
   return normalized;
 }
@@ -129,6 +129,21 @@ function validateProviderConfig(provider: LLMProvider, apiKey?: string): void {
       throw new Error(
         "The provided Ollama API key appears to be invalid. " +
         "API keys from ollama.com are typically longer strings."
+      );
+    }
+  }
+
+  if (provider === 'openrouter') {
+    if (!apiKey || apiKey.trim() === '') {
+      throw new Error(
+        "API key is required when using 'openrouter' provider. " +
+        "Get your API key from https://openrouter.ai/keys and set the 'api-key' input."
+      );
+    }
+    if (apiKey.length < 10) {
+      throw new Error(
+        "The provided OpenRouter API key appears to be invalid. " +
+        "API keys from openrouter.ai are typically longer strings."
       );
     }
   }

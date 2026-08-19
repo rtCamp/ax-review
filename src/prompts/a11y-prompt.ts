@@ -96,7 +96,7 @@ If the problematic attribute is on its own dedicated line, report the line numbe
   - Wrong line: 53 (opening tag), 56 (className), 57 (closing />)
   - Wrong suggestion: <img src={imageUrl} alt={imageAlt || 'Icon representing...'} className="item-icon" />
   Indentation example:
-  - Original attribute line (stripped of diff \`+\`):    \`   alt = { imageAlt || ''} \`  (3 spaces)
+  - Original attribute line (stripped of diff \`+\`):    \`   alt={ imageAlt || ''} \`  (3 spaces)
   - Correct suggestion: \`   alt={imageAlt || 'Icon representing item'}\` (3 spaces — same as original)
   - Wrong suggestion: \`alt={imageAlt || 'Icon representing item'}\` (0 spaces — indentation stripped)
   - Wrong suggestion: \`<img src={imageUrl} alt={imageAlt || '...'} className="item-icon" />\` (entire element — too much)
@@ -126,32 +126,32 @@ wn code fences or backticks
 For EACH file, check EVERY instance of these elements:
 
 ### IMAGES & ICONS(WCAG 1.1.1)
-  - Every < img > element: MUST have alt = ""(decorative) OR descriptive alt(informative)
-    - Every < svg > inside interactive element: MUST have aria - label OR < title > element
+  - Every <img> element: MUST have alt="" (decorative) OR descriptive alt (informative)
+    - Every <svg> inside interactive element: MUST have aria-label OR <title> element
       - Every background image conveying info: MUST have text alternative
 
 ### FORMS(WCAG 3.3.2, 1.3.1)
-  - Every < input > without type: MUST have < label > OR aria - label
-    - Every < input type = "text|email|password|tel|url|search" >: MUST have < label > OR aria - label
-      - Every<textarea>: MUST have < label > OR aria - label
-        - Every<select>: MUST have < label > OR aria - label
+  - Every <input> without type: MUST have <label> OR aria-label
+    - Every <input type="text|email|password|tel|url|search">: MUST have <label> OR aria-label
+      - Every <textarea>: MUST have <label> OR aria-label
+        - Every <select>: MUST have <label> OR aria-label
           - CRITICAL: placeholder is NOT a label - it disappears on focus
 
 ### BUTTONS & INTERACTIVE ELEMENTS(WCAG 2.1.1, 4.1.2)
-  - Every<button> with only < svg > or<img>: MUST have aria - label describing action
-    - Every < div onClick >: MUST have role = "button", tabIndex = { 0}, AND onKeyDown handler
+  - Every <button> with only <svg> or <img>: MUST have aria-label describing action
+    - Every <div onClick>: MUST have role="button", tabIndex={0}, AND onKeyDown handler
       - Every generic button("Submit", "Click"): SHOULD have descriptive context
 
 ### LINKS & NAVIGATION(WCAG 2.4.4, 4.1.2)
-  - Every < a href = "#" >: WARNING - broken href, needs meaningful destination
-    - Every icon - only<a>: MUST have aria - label
-      - Every active navigation<a>: SHOULD have aria - current="page"
-        - Multiple < nav > elements: Each MUST have unique aria - label
+  - Every <a href="#">: WARNING - broken href, needs meaningful destination
+    - Every icon - only <a>: MUST have aria-label
+      - Every active navigation <a>: SHOULD have aria-current="page"
+        - Multiple <nav> elements: Each MUST have unique aria-label
 
 ### ARIA & SEMANTICS(WCAG 4.1.2)
-  - Every role = "button" on<div>: MUST also have tabIndex = { 0} AND keyboard handlers
-    - role="form" on<form>: REDUNDANT - remove it
-      - role="navigation" on<nav>: REDUNDANT - remove it
+  - Every role="button" on <div>: MUST also have tabIndex={0} AND keyboard handlers
+    - role="form" on <form>: REDUNDANT - remove it
+      - role="navigation" on <nav>: REDUNDANT - remove it
 
 ### COLOR & STATUS(WCAG 1.4.1, 1.4.11)
   - Status indicators using ONLY color: FAIL - MUST have text / icon alternative
@@ -163,42 +163,42 @@ Some patterns require checking MULTIPLE attributes.Report missing components sep
 
 ### TABS PATTERN(WCAG 2.1.1, 4.1.2)
 When you see buttons used as tabs, check ALL of these:
-- Container: role = "tablist"
-  - Each button: role = "tab"
-    - Active state: aria - selected="true" or "false"
-      - Panel link: aria - controls pointing to tabpanel ID
+- Container: role="tablist"
+  - Each button: role="tab"
+    - Active state: aria-selected="true" or "false"
+      - Panel link: aria-controls pointing to tabpanel ID
         - Keyboard: Arrow keys navigate, Enter / Space activate
 
 Report missing pieces as separate issues at the same line.
 
 ### MODAL DIALOG(WCAG 2.4.3, 4.1.2)
 When you see modal patterns, check ALL:
-- Container: role = "dialog"
-  - Modal attribute: aria - modal="true"
-    - Title link: aria - labelledby pointing to dialog title
+- Container: role="dialog"
+  - Modal attribute: aria-modal="true"
+    - Title link: aria-labelledby pointing to dialog title
       - Close behavior: Escape key closes dialog
         - Focus trap: Focus stays inside dialog when open
 
 ### LIVE REGIONS(WCAG 4.1.3)
 Dynamic content updates MUST have:
-- aria - live="polite"(non - critical) or "assertive"(critical)
-  - aria - atomic="true" if entire region updates
+- aria-live="polite" (non - critical) or "assertive" (critical)
+  - aria-atomic="true" if entire region updates
 
 ## First Rule of ARIA
-Use native HTML elements BEFORE ARIA.A < button > is always better than < div role = "button" >.Only use ARIA when native HTML cannot express the semantics.
+Use native HTML elements BEFORE ARIA.A <button> is always better than <div role="button">.Only use ARIA when native HTML cannot express the semantics.
 
 ## ARIA Anti - Patterns to Flag
-  - NEVER add redundant ARIA: <header>already has landmark role, <nav>already has role = "navigation"
-    - aria - label on headings / buttons REPLACES descendant text - never use on content containers
-      - Icons must have aria - hidden="true" when visible text is present
-        - Icon - only buttons must have aria - label
+  - NEVER add redundant ARIA: <header> already has landmark role, <nav> already has role="navigation"
+    - aria-label on headings / buttons REPLACES descendant text - never use on content containers
+      - Icons must have aria-hidden="true" when visible text is present
+        - Icon - only buttons must have aria-label
 
 ## Accessible Name Rules
-1. Prefer visible text over aria - label when possible
-2. Use aria - labelledby pointing to visible heading when section has a heading
-3. Never use aria - label on headings, paragraphs, or content containers
-4. Names should describe function, not form(e.g., "Submit" not "Green button")
-5. Keep names brief(1 - 3 words)
+1. Prefer visible text over aria-label when possible
+2. Use aria-labelledby pointing to visible heading when section has a heading
+3. Never use aria-label on headings, paragraphs, or content containers
+4. Names should describe function, not form (e.g., "Submit" not "Green button")
+5. Keep names brief (1-3 words)
 
 ## Diff Analysis Rules
   - ONLY report issues on lines with '+' prefix(added / modified code)

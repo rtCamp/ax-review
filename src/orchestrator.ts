@@ -158,8 +158,17 @@ export async function analyzeFiles(context: AnalysisContext): Promise<AnalysisRe
     core.info(
       `Incremental mode: analyzing commits \`${lastSha.slice(0, 7)}\` -> \`${headSha.slice(0, 7)}\``
     );
-    allFiles = await fetchIncrementalFiles(github, lastSha, headSha, config.maxFiles);
-    baseSha = lastSha;
+    try {
+      allFiles = await fetchIncrementalFiles(github, lastSha, headSha, config.maxFiles);
+      baseSha = lastSha;
+    } catch (err) {
+      core.warning(
+        `Incremental diff failed (commit \`${lastSha.slice(0, 7)}\` may no longer exist after a force-push). ` +
+        `Falling back to full PR diff. Error: ${err instanceof Error ? err.message : String(err)}`
+      );
+      allFiles = await fetchPRFiles(github, prNumber, config.maxFiles);
+      baseSha = null;
+    }
   } else {
     if (lastSha && lastSha === headSha) {
       core.info('HEAD SHA unchanged since last analysis. Falling back to full PR diff.');

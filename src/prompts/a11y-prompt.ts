@@ -59,109 +59,139 @@ Example - Multiple images without alt:
 Result: 2 SEPARATE issues
 
 ## Inline Suggestion Rules
-When writing the suggestion field, the goal is a minimal, accurate diff replacement.
+When writing the suggestion field, the goal is a minimal, accurate diff replacement
+that GitHub can apply directly. The suggestion MUST be a drop-in replacement for the
+reported line(s) — wrong indentation will make the suggestion impossible to apply.
+
+### CRITICAL: Indentation must be character-perfect
+The suggestion string must begin with the EXACT same leading whitespace (spaces or tabs)
+as the original line in the diff.
+
+How to determine indentation:
+1. Look at the diff line for the reported line number. It will look like: \`+      <img src=...>\`
+2. Strip the leading \`+\` (diff prefix). The remaining leading whitespace IS the indentation.
+3. Your suggestion must START with that exact same whitespace.
+
+WRONG (indentation stripped or changed):
+  - Original line in diff: \`+        <img src="x.jpg" alt="" />\`  (8 spaces)
+  - Wrong suggestion:      \`<img src="x.jpg" alt="Logo" />\`        (0 spaces — stripped)
+  - Wrong suggestion:      \`  <img src="x.jpg" alt="Logo" />\`      (2 spaces — wrong)
+
+CORRECT:
+  - Original line in diff: \`+        <img src="x.jpg" alt="" />\`  (8 spaces)
+  - Correct suggestion:    \`        <img src="x.jpg" alt="Logo" />\` (same 8 spaces)
+
+The same rule applies to multi-line suggestions: EVERY line in the suggestion must
+start with the correct indentation for that line as it would appear in the source file.
 
 ### Multi-line elements (attribute on its own line)
 If the problematic attribute is on its own dedicated line, report the line number of THAT attribute line and suggest ONLY the fixed attribute:
 - Identify the exact line containing the faulty attribute (e.g. the line that reads alt={imageAlt || ''})
 - Set line to that attribute's [N] marker number
-- suggestion must contain only the corrected attribute, preserving original indentation
+- suggestion must contain only the corrected attribute line, with the SAME leading whitespace as the original attribute line
 - Example:
-  - Code: [54]   src={imageUrl}\n[55]   alt={imageAlt || ''}\n[56]   className="item-icon"
+  - Code: [54]   src={imageUrl}\\n[55]   alt={imageAlt || ''}\\n[56]   className="item-icon"
   - Correct line: 55
   - Correct suggestion:                   alt={imageAlt || 'Icon representingitem'}
   - Wrong line: 53 (opening tag), 56 (className), 57 (closing />)
   - Wrong suggestion: <img src={imageUrl} alt={imageAlt || 'Icon representing...'} className="item-icon" />
+  Indentation example:
+  - Original attribute line (stripped of diff \`+\`):    \`   alt={ imageAlt || ''} \`  (3 spaces)
+  - Correct suggestion: \`   alt={imageAlt || 'Icon representing item'}\` (3 spaces — same as original)
+  - Wrong suggestion: \`alt={imageAlt || 'Icon representing item'}\` (0 spaces — indentation stripped)
+  - Wrong suggestion: \`<img src={imageUrl} alt={imageAlt || '...'} className="item-icon" />\` (entire element — too much)
 
 ### Single-line elements (entire element on one line)
 If the entire element is on one line, report that line number and provide the complete fix:
-- If the fix only modifies the existing line: rewrite just that line with the fix applied
-- If the fix requires adding new lines (e.g. inserting a new element before or after): include ALL lines in the suggestion, with each line separated by an actual newline character
+- If the fix only modifies the existing line: rewrite just that line with the fix applied, preserving the original leading whitespace exactly
+- If the fix requires adding new lines (e.g. inserting a label before an input): include ALL lines in the suggestion, separated by actual newline characters, each line correctly indented
 - Example for a single-line modification:
-  - Code: [18] +  <img src={imageUrl} alt={imageAlt} className="item-icon" />
-  - Correct suggestion:           <img src={imageUrl} alt={imageAlt || 'Icon'} className="item-icon" />
+  - Code: [18] +  \`  <img src={imageUrl} alt="" className="item-icon" />\`  (2 spaces)
+  - Correct suggestion: \`  <img src={imageUrl} alt="Product icon" className="item-icon" />\` (same 2 spaces)
 - Example for a fix requiring additional lines:
-  - Code: [12] +  <input type="text" placeholder="Enter your name">
-  - Correct suggestion (two lines, separated by newline):
-    <label for="name-input">Name:</label>
-    <input id="name-input" type="text" placeholder="Enter your name">
+  - Code: [12] +  \`    <input type="text" placeholder="Enter your name">\`  (4 spaces)
+  - Correct suggestion (two lines, each with 4 spaces):
+    \`    <label for="name-input">Name:</label>\\n    <input id="name-input" type="text" placeholder="Enter your name">\`
 
 ### Rules that apply to both cases
-- Always preserve the original indentation/whitespace exactly
+- Copy the leading whitespace character-for-character from the original diff line (after stripping the \`+\` prefix)
+- Do NOT normalize, strip, or re-indent the code — even if the original indentation looks unusual
 - The suggestion replaces the reported line with however many lines the suggestion contains
 - Do not wrap suggestions in markdown code fences or backticks
+wn code fences or backticks
+
 
 ## Systematic Element Checklist
 
 For EACH file, check EVERY instance of these elements:
 
-### IMAGES & ICONS (WCAG 1.1.1)
-- Every <img> element: MUST have alt="" (decorative) OR descriptive alt (informative)
-- Every <svg> inside interactive element: MUST have aria-label OR <title> element
-- Every background image conveying info: MUST have text alternative
+### IMAGES & ICONS(WCAG 1.1.1)
+  - Every <img> element: MUST have alt="" (decorative) OR descriptive alt (informative)
+    - Every <svg> inside interactive element: MUST have aria-label OR <title> element
+      - Every background image conveying info: MUST have text alternative
 
-### FORMS (WCAG 3.3.2, 1.3.1)
-- Every <input> without type: MUST have <label> OR aria-label
-- Every <input type="text|email|password|tel|url|search">: MUST have <label> OR aria-label
-- Every <textarea>: MUST have <label> OR aria-label
-- Every <select>: MUST have <label> OR aria-label
-- CRITICAL: placeholder is NOT a label - it disappears on focus
+### FORMS(WCAG 3.3.2, 1.3.1)
+  - Every <input> without type: MUST have <label> OR aria-label
+    - Every <input type="text|email|password|tel|url|search">: MUST have <label> OR aria-label
+      - Every <textarea>: MUST have <label> OR aria-label
+        - Every <select>: MUST have <label> OR aria-label
+          - CRITICAL: placeholder is NOT a label - it disappears on focus
 
-### BUTTONS & INTERACTIVE ELEMENTS (WCAG 2.1.1, 4.1.2)
-- Every <button> with only <svg> or <img>: MUST have aria-label describing action
-- Every <div onClick>: MUST have role="button", tabIndex={0}, AND onKeyDown handler
-- Every generic button ("Submit", "Click"): SHOULD have descriptive context
+### BUTTONS & INTERACTIVE ELEMENTS(WCAG 2.1.1, 4.1.2)
+  - Every <button> with only <svg> or <img>: MUST have aria-label describing action
+    - Every <div onClick>: MUST have role="button", tabIndex={0}, AND onKeyDown handler
+      - Every generic button("Submit", "Click"): SHOULD have descriptive context
 
-### LINKS & NAVIGATION (WCAG 2.4.4, 4.1.2)
-- Every <a href="#">: WARNING - broken href, needs meaningful destination
-- Every icon-only <a>: MUST have aria-label
-- Every active navigation <a>: SHOULD have aria-current="page"
-- Multiple <nav> elements: Each MUST have unique aria-label
+### LINKS & NAVIGATION(WCAG 2.4.4, 4.1.2)
+  - Every <a href="#">: WARNING - broken href, needs meaningful destination
+    - Every icon - only <a>: MUST have aria-label
+      - Every active navigation <a>: SHOULD have aria-current="page"
+        - Multiple <nav> elements: Each MUST have unique aria-label
 
-### ARIA & SEMANTICS (WCAG 4.1.2)
-- Every role="button" on <div>: MUST also have tabIndex={0} AND keyboard handlers
-- role="form" on <form>: REDUNDANT - remove it
-- role="navigation" on <nav>: REDUNDANT - remove it
+### ARIA & SEMANTICS(WCAG 4.1.2)
+  - Every role="button" on <div>: MUST also have tabIndex={0} AND keyboard handlers
+    - role="form" on <form>: REDUNDANT - remove it
+      - role="navigation" on <nav>: REDUNDANT - remove it
 
-### COLOR & STATUS (WCAG 1.4.1, 1.4.11)
-- Status indicators using ONLY color: FAIL - MUST have text/icon alternative
-- Interactive elements styled ONLY by color: NEED visible indicator
+### COLOR & STATUS(WCAG 1.4.1, 1.4.11)
+  - Status indicators using ONLY color: FAIL - MUST have text / icon alternative
+    - Interactive elements styled ONLY by color: NEED visible indicator
 
 ## Complex Pattern Detection
 
-Some patterns require checking MULTIPLE attributes. Report missing components separately:
+Some patterns require checking MULTIPLE attributes.Report missing components separately:
 
-### TABS PATTERN (WCAG 2.1.1, 4.1.2)
+### TABS PATTERN(WCAG 2.1.1, 4.1.2)
 When you see buttons used as tabs, check ALL of these:
 - Container: role="tablist"
-- Each button: role="tab"
-- Active state: aria-selected="true" or "false"
-- Panel link: aria-controls pointing to tabpanel ID
-- Keyboard: Arrow keys navigate, Enter/Space activate
+  - Each button: role="tab"
+    - Active state: aria-selected="true" or "false"
+      - Panel link: aria-controls pointing to tabpanel ID
+        - Keyboard: Arrow keys navigate, Enter / Space activate
 
 Report missing pieces as separate issues at the same line.
 
-### MODAL DIALOG (WCAG 2.4.3, 4.1.2)
+### MODAL DIALOG(WCAG 2.4.3, 4.1.2)
 When you see modal patterns, check ALL:
 - Container: role="dialog"
-- Modal attribute: aria-modal="true"
-- Title link: aria-labelledby pointing to dialog title
-- Close behavior: Escape key closes dialog
-- Focus trap: Focus stays inside dialog when open
+  - Modal attribute: aria-modal="true"
+    - Title link: aria-labelledby pointing to dialog title
+      - Close behavior: Escape key closes dialog
+        - Focus trap: Focus stays inside dialog when open
 
-### LIVE REGIONS (WCAG 4.1.3)
+### LIVE REGIONS(WCAG 4.1.3)
 Dynamic content updates MUST have:
-- aria-live="polite" (non-critical) or "assertive" (critical)
-- aria-atomic="true" if entire region updates
+- aria-live="polite" (non - critical) or "assertive" (critical)
+  - aria-atomic="true" if entire region updates
 
 ## First Rule of ARIA
-Use native HTML elements BEFORE ARIA. A <button> is always better than <div role="button">. Only use ARIA when native HTML cannot express the semantics.
+Use native HTML elements BEFORE ARIA.A <button> is always better than <div role="button">.Only use ARIA when native HTML cannot express the semantics.
 
-## ARIA Anti-Patterns to Flag
-- NEVER add redundant ARIA: <header> already has landmark role, <nav> already has role="navigation"
-- aria-label on headings/buttons REPLACES descendant text - never use on content containers
-- Icons must have aria-hidden="true" when visible text is present
-- Icon-only buttons must have aria-label
+## ARIA Anti - Patterns to Flag
+  - NEVER add redundant ARIA: <header> already has landmark role, <nav> already has role="navigation"
+    - aria-label on headings / buttons REPLACES descendant text - never use on content containers
+      - Icons must have aria-hidden="true" when visible text is present
+        - Icon - only buttons must have aria-label
 
 ## Accessible Name Rules
 1. Prefer visible text over aria-label when possible
@@ -171,11 +201,11 @@ Use native HTML elements BEFORE ARIA. A <button> is always better than <div role
 5. Keep names brief (1-3 words)
 
 ## Diff Analysis Rules
-- ONLY report issues on lines with '+' prefix (added/modified code)
-- Map line numbers using [N] position markers in the diff
-- Report issues for the NEW file state, not the old state
-- Skip deleted lines (lines with '-' prefix)
-- Skip context lines (lines without '+' or '-')
+  - ONLY report issues on lines with '+' prefix(added / modified code)
+    - Map line numbers using[N] position markers in the diff
+      - Report issues for the NEW file state, not the old state
+        - Skip deleted lines(lines with '-' prefix)
+- Skip context lines(lines without '+' or '-')
 
 ## What to Report
 1. Missing accessibility features in new code
@@ -184,20 +214,20 @@ Use native HTML elements BEFORE ARIA. A <button> is always better than <div role
 4. Form label associations
 5. Heading structure problems
 6. Image alt text issues
-7. Color contrast concerns (note: cannot definitively judge contrast from code alone)
+7. Color contrast concerns(note: cannot definitively judge contrast from code alone)
 8. Link text clarity
 
 ## What NOT to Report
-- Issues in deleted code
-- Theoretical issues without evidence in the diff
-- Style-only changes without accessibility impact
-- Correct accessibility implementations (but note as good practices)
+  - Issues in deleted code
+    - Theoretical issues without evidence in the diff
+      - Style - only changes without accessibility impact
+        - Correct accessibility implementations(but note as good practices)
 
 ## Suggestion Requirements
-- Must be EXACT code ready to copy-paste
-- Must match the file's indentation and style
-- Must be a complete fix, not partial instructions
-- If multiple fixes possible, choose the most accessible option
+  - Must be EXACT code ready to copy - paste
+    - Must match the file's indentation and style
+      - Must be a complete fix, not partial instructions
+        - If multiple fixes possible, choose the most accessible option
 
 ## Output Format
 Return valid JSON matching this schema:
@@ -214,10 +244,10 @@ Return valid JSON matching this schema:
     "impact": "Screen reader users will not know what the image conveys.",
     "suggestion": "<img src=\"chart.png\" alt=\"Bar chart showing 40% increase in Q3 sales\" />"
   }],
-  "summary": "3 issues found: 1 CRITICAL, 1 SERIOUS, 1 MINOR"
+    "summary": "3 issues found: 1 CRITICAL, 1 SERIOUS, 1 MINOR"
 }
 
-Always explain your reasoning. Developers need to understand why, not just what.`;
+Always explain your reasoning.Developers need to understand why, not just what.`;
 }
 
 /**
@@ -233,7 +263,7 @@ function escapePromptContent(content: string): string {
     .replace(/\t/g, '\\t')    // Escape tabs
     .replace(/[\x00-\x1f]/g, (char) => {
       // Escape control characters
-      return `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`;
+      return `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')} `;
     });
 }
 
@@ -269,7 +299,7 @@ export function buildUserPrompt(
   if (injectionAttempts.length > 0) {
     console.warn('[Security] Potential prompt injection detected in PR content:');
     for (const attempt of injectionAttempts) {
-      console.warn(`[Security] - ${attempt}`);
+      console.warn(`[Security] - ${attempt} `);
     }
     // Continue processing - the system prompt is designed to be robust
   }
@@ -283,27 +313,27 @@ export function buildUserPrompt(
   const modifiedFiles = files.filter(f => f.status === 'modified').length;
 
   const header = `## Repository Context
-- Repository: ${safeOwner}/${safeRepo}
-- Pull Request: #${prNumber}
+  - Repository: ${safeOwner}/${safeRepo}
+    - Pull Request: #${prNumber}
 - Files to analyze: ${fileCount} (${addedFiles} added, ${modifiedFiles} modified)
 
 ## Task
 Analyze the following diffs for WCAG 2.2 AA accessibility violations.
-Focus only on NEW code (lines with '+' prefix).
-Report issues with exact line numbers matching the [N] position markers.
+Focus only on NEW code(lines with '+' prefix).
+Report issues with exact line numbers matching the[N] position markers.
 
 `;
 
   const findingsSection = findings
     ? `
-## Pre-existing Accessibility Findings (CONTEXT/REFERENCE ONLY)
+## Pre - existing Accessibility Findings(CONTEXT / REFERENCE ONLY)
 
 Automated tools ran earlier in the his workflow and produced the findings below.
 
 ### How to use these findings
 
-These findings describe issues detected in the **full file content**, not just
-the diff. Many findings will reference lines that are unchanged context — those
+These findings describe issues detected in the ** full file content **, not just
+the diff.Many findings will reference lines that are unchanged context — those
 lines do not exist in the PR diff and CANNOT be anchored to a review comment or
 should be a violation.
 
@@ -311,13 +341,13 @@ CRITICAL RULES for using these findings:
 - These are provided as CONTEXT ONLY to help you understand existing issues.
   Use it to understand the accessibility state of the files, not
   as a list of comments to post verbatim.
-- Do NOT report the same violation twice. If a finding from these tools
+- Do NOT report the same violation twice.If a finding from these tools
   matches something you independently identified in the diff, report it ONCE
-  at the correct diff line number. Do not create a second comment from the tool
-  finding.
+  at the correct diff line number.Do not create a second comment from the tool
+finding.
 - Do NOT try to map these line numbers to the diff — they will not match
-- Line numbers in these findings refer to the extracted/scanned file, which
-   may differ from the PR diff line numbering. Always use the [N] position
+  - Line numbers in these findings refer to the extracted / scanned file, which
+   may differ from the PR diff line numbering.Always use the[N] position
    markers from the diff below as the authoritative line reference.
 - If a finding refers to a line not present in the diff, DO NOT report it at all
 
@@ -325,7 +355,7 @@ ${findings}
 
 ---
 
-`
+  `
     : '';
 
   const formattedDiffs = files.map(formatFilePatch).join('\n\n');
@@ -352,24 +382,24 @@ ${findings}
       }
     }
 
-    return `- ${sanitizeFilename(file.filename)}: valid lines are [${validLines.join(', ')}]`;
+    return `- ${sanitizeFilename(file.filename)}: valid lines are[${validLines.join(', ')}]`;
   }).join('\n');
 
   const validLinesReminder = `
 ## Valid Reportable Lines
-You may ONLY report issues on these exact line numbers (lines added or present in the diff).
+You may ONLY report issues on these exact line numbers(lines added or present in the diff).
 Any other line number will be rejected and the comment will be silently dropped.
-Do not use line numbers from the Pre-existing Accessibility Findings section above if provided.
+Do not use line numbers from the Pre - existing Accessibility Findings section above if provided.
 Those refer to full file line numbers which are different from diff line numbers.
 
-${validLinesSection}
+  ${validLinesSection}
 `;
 
   const footer = `
 
 ## Important Reminders
-1. Only flag issues on lines with '+' prefix (new code)
-2. Use [N] position markers for line numbers
+1. Only flag issues on lines with '+' prefix(new code)
+2. Use[N] position markers for line numbers
 3. Provide EXACT code fixes, not instructions
 4. Include confidence level for each finding
 5. Describe the impact on users with disabilities
@@ -378,15 +408,15 @@ ${validLinesReminder}
 
 ## Completeness Checklist
 For EACH file, systematically check:
-- [ ] All <img>, <svg>, <input>, <button>, <a> elements have required attributes
-- [ ] All onClick handlers have keyboard alternatives
-- [ ] All form fields have labels
-- [ ] All interactive elements have accessible names
+-[] All<img>, <svg>, <input>, <button>, <a>elements have required attributes
+  - [] All onClick handlers have keyboard alternatives
+    - [] All form fields have labels
+      - [] All interactive elements have accessible names
 
 When the SAME issue type appears multiple times, report EACH occurrence separately.
 `;
 
-  return `${header}${findingsSection}${formattedDiffs}${footer}`;
+  return `${header}${findingsSection}${formattedDiffs}${footer} `;
 }
 
 /**
@@ -421,14 +451,14 @@ function formatFilePatch(file: FilePatch): string {
       lineNumber++;
       // Escape the added line content
       const escapedLine = escapePromptContent(line);
-      formattedLines.push(`[${lineNumber}] ${escapedLine}`);
+      formattedLines.push(`[${lineNumber}] ${escapedLine} `);
     } else if (line.startsWith('-')) {
       // Skip deleted lines - don't include in analysis
       continue;
     } else {
       // Context line
       lineNumber++;
-      formattedLines.push(`[${lineNumber}] ${escapePromptContent(line)}`);
+      formattedLines.push(`[${lineNumber}] ${escapePromptContent(line)} `);
     }
   }
 
@@ -465,7 +495,7 @@ export function detectPromptInjection(content: string): string[] {
 
   for (const pattern of PROMPT_INJECTION_PATTERNS) {
     if (pattern.test(content)) {
-      detected.push(`Suspicious pattern detected: ${pattern.source}`);
+      detected.push(`Suspicious pattern detected: ${pattern.source} `);
     }
   }
 
@@ -487,7 +517,7 @@ export function sanitizePromptContent(content: string): string {
   // The LLM prompt system is designed to ignore such injections
   console.warn('[Security] Potential prompt injection patterns detected in diff content:');
   for (const attempt of injectionAttempts) {
-    console.warn(`[Security] - ${attempt}`);
+    console.warn(`[Security] - ${attempt} `);
   }
 
   return content;

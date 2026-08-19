@@ -224,4 +224,45 @@ export class GitHubClient {
     core.info(`Created check run ${checkRun.id} with ${annotations.length} annotations`);
     return checkRun.id;
   }
+
+  /**
+   * Fetch files changed between two commits (incremental diff).
+   *
+   * @param base - The SHA to diff FROM (last analyzed commit)
+   * @param head - The SHA to diff TO (current HEAD)
+   */
+  async compareCommits(base: string, head: string): Promise<FilePatch[]> {
+    try {
+      const response = await this.octokit.rest.repos.compareCommitsWithBasehead({
+        owner: this.owner,
+        repo: this.repo,
+        basehead: `${base}...${head}`,
+      });
+
+      const files: FilePatch[] = [];
+      for (const file of response.data.files ?? []) {
+        if (file.status === 'removed') continue;
+        if (!file.patch) {
+          core.debug(`Skipping ${file.filename}. No patch available`);
+          continue;
+        }
+        const status = validateFileStatus(file.status);
+        files.push({
+          filename: file.filename,
+          patch: file.patch,
+          status,
+          additions: file.additions ?? 0,
+          deletions: file.deletions ?? 0,
+        });
+      }
+
+      core.info(`Compare ${base.slice(0, 7)}...${head.slice(0, 7)}: ${files.length} files changed`);
+      return files;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Failed to compare commits ${base.slice(0, 7)}...${head.slice(0, 7)}: ${message}`
+      );
+    }
+  }
 }

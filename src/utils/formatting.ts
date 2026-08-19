@@ -53,6 +53,14 @@ export const SEVERITY_ANNOTATION_LEVELS: Record<Severity, 'failure' | 'warning' 
 export const COMMENT_IDENTIFIER = '<!-- a11y-review -->';
 export const SUMMARY_MARKER = '<!-- ax-review-summary -->';
 export const VIOLATION_COUNT_REGEX = /<!-- ax-violations:(\d+) -->/;
+export const SHA_MARKER_REGEX = /<!-- ax-last-sha:([a-f0-9]+) -->/;
+
+/**
+ * Extract the last-analyzed commit SHA from an existing comment body.
+ */
+export function extractLastSha(body: string): string | null {
+  return body.match(SHA_MARKER_REGEX)?.[1] ?? null;
+}
 
 // =============================================================================
 // Review Comment Formatting
@@ -200,7 +208,8 @@ export function formatReviewSummary(issues: A11yIssue[]): string {
  */
 export function formatFirstRunSummary(
   issues: A11yIssue[],
-  failedBatches: FailedBatch[]
+  failedBatches: FailedBatch[],
+  headSha: string
 ): string {
   const violations = issues.filter(i => i.severity !== 'MINOR');
   const goodPractices = issues.filter(i => i.severity === 'MINOR');
@@ -210,6 +219,7 @@ export function formatFirstRunSummary(
   const lines = [
     SUMMARY_MARKER,
     `<!-- ax-violations:${violationCount} -->`,
+    `<!-- ax-last-sha:${headSha} -->`,
     '',
     `## Accessibility Review — ${status}`,
     '',
@@ -280,55 +290,49 @@ export function formatFirstRunSummary(
 }
 
 /**
- * Format the delta update for subsequent pushes.
+ * Format the incremental update for subsequent pushes.
+ *
+ * Shows only what was found in commits between baseSha and headSha.
  */
 export function formatDeltaSummary(
   issues: A11yIssue[],
   failedBatches: FailedBatch[],
-  sha: string,
-  prevBody: string
+  baseSha: string,
+  headSha: string
 ): string {
   const violations = issues.filter(i => i.severity !== 'MINOR').length;
   const goodPractices = issues.filter(i => i.severity === 'MINOR');
   const status = violations > 0 ? '🔴 Failed' : '🟢 Passed';
 
-  // Parse previous violation count from hidden marker
-  const prevMatch = prevBody.match(VIOLATION_COUNT_REGEX);
-  const prevViolationCount = prevMatch?.[1];
-  const prevCount = prevViolationCount
-    ? parseInt(prevViolationCount, 10)
-    : null;
-
-  let deltaStr = '';
-  if (prevCount !== null) {
-    const delta = violations - prevCount;
-    if (delta > 0) deltaStr = ` ⬆️ +${delta} from last push`;
-    else if (delta < 0) deltaStr = ` ⬇️ ${delta} from last push`;
-    else deltaStr = ` ↔️ no change`;
-  }
-
   const lines = [
     SUMMARY_MARKER,
     `<!-- ax-violations:${violations} -->`,
+    `<!-- ax-last-sha:${headSha} -->`,
     '',
     `## Accessibility Review — ${status}`,
     '',
     '| Metric | Count |',
     '|--------|-------|',
-    `| Violations | **${violations}**${deltaStr} |`,
-    `| Suggestions | **${goodPractices.length}** |`,
+    `| Violations (new commits) | **${violations}** |`,
+    `| Suggestions (new commits) | **${goodPractices.length}** |`,
     '',
   ];
 
-  if (goodPractices.length > 0) {
-    lines.push(`### 🔵 Good Practices (${goodPractices.length})`);
-    lines.push('');
-    lines.push('These are not violations but represent accessibility best practices:');
-    lines.push('');
-    for (const issue of goodPractices) {
-      lines.push(formatIssueListItem(issue));
+  if (violations > 0 || goodPractices.length > 0) {
+    const grouped = groupBySeverity(issues);
+    for (const severity of Object.keys(grouped) as Array<keyof typeof grouped>) {
+      if (grouped[severity].length === 0) continue;
+      const icon = SEVERITY_ICONS[severity];
+      const title = SEVERITY_TITLES[severity];
+      lines.push(`### ${icon} ${title} Issues (${grouped[severity].length})`);
+      lines.push('');
+      for (const issue of grouped[severity]) {
+        lines.push(formatIssueListItem(issue));
+      }
+      lines.push('');
     }
-    lines.push('');
+  } else {
+    lines.push('**No new WCAG 2.2 AA violations in this push.** 🎉', '');
   }
 
   if (failedBatches.length > 0) {
@@ -339,7 +343,7 @@ export function formatDeltaSummary(
   }
 
   lines.push(
-    `> Re-scanned at commit \`${sha.slice(0, 7)}\``,
+    `> Analyzed new commits \`${baseSha.slice(0, 7)}\` -> \`${headSha.slice(0, 7)}\``,
     '',
     '> _This comment updates automatically on each push._'
   );

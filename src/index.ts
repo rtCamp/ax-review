@@ -147,7 +147,9 @@ export async function run(): Promise<void> {
       prInfo.headSha,
       result.issues,
       result.failedBatches,
-      config.outputMode
+      config.outputMode,
+      result.existingComment,
+      result.baseSha
     );
 
     // -----------------------------------------------------------------------

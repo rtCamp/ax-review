@@ -193,7 +193,7 @@ export function validateApiKey(apiKey: string, minRequiredLength = 20): string {
  * Validates a model name to prevent injection attacks.
  * 
  * **Validation rules:**
- * - Only allows: a-z, A-Z, 0-9, ., _, -, :
+ * - Only allows: a-z, A-Z, 0-9, ., _, -, :, /
  * - Maximum length: 100 characters
  * - Trimmed of whitespace
  * 
@@ -204,6 +204,8 @@ export function validateApiKey(apiKey: string, minRequiredLength = 20): string {
  * @example
  * validateModelName('gemini-2.0-flash'); // OK
  * validateModelName('llama3.2:latest'); // OK
+ * validateModelName('deepseek/deepseek-v4-pro'); // OK
+ * validateModelName('google/gemma-4-26b-a4b-it:free'); // OK
  * validateModelName('../../etc/passwd'); // Error - path traversal
  */
 export function validateModelName(model: string): string {
@@ -214,11 +216,11 @@ export function validateModelName(model: string): string {
   if (sanitized.length > MAX_LENGTHS.model) {
     throw new Error(`Model name exceeds maximum length of ${MAX_LENGTHS.model} characters`);
   }
-  
-  if (!/^[a-zA-Z0-9._:-]+$/.test(sanitized)) {
+
+  if (!/^[a-zA-Z0-9._:/-]+$/.test(sanitized)) {
     throw new Error(
       `Invalid model name: '${sanitized}'. ` +
-      `Only alphanumeric characters, dots, dashes, underscores, and colons are allowed.`
+      `Only alphanumeric characters, dots, dashes, underscores, colons, and forward slashes are allowed.`
     );
   }
   

@@ -6,9 +6,10 @@
  */
 
 import type { LLMProvider } from '../types';
-import type { LLMClient, GeminiConfig, OllamaConfig } from './types';
+import type { LLMClient, GeminiConfig, OllamaConfig, OpenRouterConfig } from './types';
 import { GeminiClient } from './gemini';
 import { OllamaClient } from './ollama';
+import { OpenRouterClient } from './openrouter';
 import { LLMError } from './types';
 
 /**
@@ -21,7 +22,7 @@ import { LLMError } from './types';
  */
 export function createLLMClient(
   provider: LLMProvider,
-  config: GeminiConfig | OllamaConfig
+  config: GeminiConfig | OllamaConfig | OpenRouterConfig
 ): LLMClient {
   switch (provider) {
     case 'gemini': {
@@ -33,11 +34,17 @@ export function createLLMClient(
     case 'ollama': {
       return new OllamaClient(config as OllamaConfig);
     }
+    case 'openrouter': {
+      if (!('apiKey' in config) || !config.apiKey) {
+        throw new LLMError('OpenRouter provider requires an API key', undefined, false);
+      }
+      return new OpenRouterClient(config as OpenRouterConfig);
+    }
     default: {
       // TypeScript exhaustiveness check
       const _exhaustiveCheck: never = provider;
       throw new LLMError(
-        `Unknown LLM provider: ${String(_exhaustiveCheck)}. Supported providers: gemini, ollama`,
+        `Unknown LLM provider: ${String(_exhaustiveCheck)}. Supported providers: gemini, ollama, openrouter`,
         undefined,
         false
       );
@@ -54,6 +61,8 @@ export function getDefaultModel(provider: LLMProvider): string {
       return 'gemini-2.0-flash';
     case 'ollama':
       return 'llama3.2';
+    case 'openrouter':
+      return 'deepseek/deepseek-v4-pro';
     default:
       return 'gemini-2.0-flash';
   }
@@ -67,7 +76,7 @@ export function buildLLMConfig(
   apiKey: string | undefined,
   model: string | undefined,
   ollamaUrl: string
-): GeminiConfig | OllamaConfig {
+): GeminiConfig | OllamaConfig | OpenRouterConfig {
   switch (provider) {
     case 'gemini': {
       return {
@@ -87,6 +96,19 @@ export function buildLLMConfig(
         baseUrl: ollamaUrl,
         model: model ?? getDefaultModel(provider),
         apiKey,
+      };
+    }
+    case 'openrouter': {
+      if (!apiKey) {
+        throw new LLMError(
+          'OpenRouter requires an API key. Get your key from https://openrouter.ai/keys',
+          undefined,
+          false
+        );
+      }
+      return {
+        apiKey,
+        model: model ?? getDefaultModel(provider),
       };
     }
     default:

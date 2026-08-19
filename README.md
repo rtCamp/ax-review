@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-green.svg)](https://nodejs.org/)
 
-Automated WCAG 2.2 accessibility review for pull requests using LLMs (Gemini or Ollama Cloud).
+Automated WCAG 2.2 accessibility review for pull requests using LLMs (Gemini, Ollama, or OpenRouter).
 
 ## Why ax-review?
 
@@ -12,7 +12,7 @@ Automated WCAG 2.2 accessibility review for pull requests using LLMs (Gemini or 
 - **Context-Aware Analysis** — Hybrid file detection analyzes React, Vue, Django, WordPress, and more
 - **Actionable Feedback** — Provides exact code fixes, not just problem descriptions
 - **Developer-Friendly** — Integrates directly into GitHub PR workflow
-- **Flexible Deployment** — Use Gemini or Ollama Cloud APIs with self-hosted options
+- **Flexible Deployment** — Use Gemini, OpenRouter or Ollama Cloud with self-hosted options
 - **Security-First** — Built-in secret detection with Gitleaks prevents leaking credentials
 
 ## Overview
@@ -58,103 +58,102 @@ This complements PR diff analysis by validating the fully rendered deployed expe
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │                           GitHub Actions Runtime                             │
 │                                                                              │
-│  ┌──────────────────────────────────────────────────────────────────────┐   │
-│  │                         Trigger: PR Event                             │   │
-│  └──────────────────────────────────────────────────────────────────────┘   │
+│  ┌──────────────────────────────────────────────────────────────────────┐    │
+│  │                         Trigger: PR Event                            │    │
+│  └──────────────────────────────────────────────────────────────────────┘    │
 │                                   │                                          │
 │                                   ▼                                          │
-│  ┌──────────────────────────────────────────────────────────────────────┐   │
-│  │                     1. Input Validation                              │   │
-│  │                        - Token/Provider/API Key                      │   │
-│  │                        - Configuration Options                       │   │
-│  └──────────────────────────────────────────────────────────────────────┘   │
+│  ┌──────────────────────────────────────────────────────────────────────┐    │
+│  │                     1. Input Validation                              │    │
+│  │                        - Token/Provider/API Key                      │    │
+│  │                        - Configuration Options                       │    │
+│  └──────────────────────────────────────────────────────────────────────┘    │
 │                                   │                                          │
 │                                   ▼                                          │
-│  ┌──────────────────────────────────────────────────────────────────────┐   │
-│  │                    2. Fetch PR Metadata                               │   │
-│  │                        - Draft Status → Skip?                         │   │
-│  │                        - Head SHA for Reviews                        │   │
-│  │                        - Pagination (100/page)                       │   │
-│  └──────────────────────────────────────────────────────────────────────┘   │
+│  ┌──────────────────────────────────────────────────────────────────────┐    │
+│  │                    2. Fetch PR Metadata                              │    │
+│  │                        - Draft Status → Skip?                        │    │
+│  │                        - Head SHA for Reviews                        │    │
+│  │                        - Pagination (100/page)                       │    │
+│  └──────────────────────────────────────────────────────────────────────┘    │
 │                                   │                                          │
 │                                   ▼                                          │
-│  ┌──────────────────────────────────────────────────────────────────────┐   │
-│  │                   3. Secret Detection (Gitleaks)                      │   │
-│  │                        - Scan All Diffs                              │   │
-│  │                        - Redact Secrets → [REDACTED]                  │   │
-│  │                        - Block on Leak Detection                      │   │
-│  └──────────────────────────────────────────────────────────────────────┘   │
+│  ┌──────────────────────────────────────────────────────────────────────┐    │
+│  │                   3. Secret Detection (Gitleaks)                     │    │
+│  │                        - Scan All Diffs                              │    │
+│  │                        - Redact Secrets → [REDACTED]                 │    │
+│  │                        - Block on Leak Detection                     │    │
+│  └──────────────────────────────────────────────────────────────────────┘    │
 │                                   │                                          │
 │                                   ▼                                          │
-│  ┌──────────────────────────────────────────────────────────────────────┐   │
-│  │               4. Hybrid File Detection                               │   │
-│  │       ┌─────────────────────────────────────────────────┐            │   │
-│  │       │  Markup Extensions (Always Analyze)            │            │   │
-│  │       │  html, jsx, tsx, vue, svelte, astro            │            │   │
-│  │       │  css, scss, sass, php, blade, erb, mdx         │            │   │
-│  │       └─────────────────────────────────────────────────┘            │   │
-│  │       ┌─────────────────────────────────────────────────┐            │   │
-│  │       │  Ambiguous Extensions (Content Scan)           │            │   │
-│  │       │  js, ts, mjs, cjs, py, rb, java                │            │   │
-│  │       │  → Check for JSX, templates, inline styles     │            │   │
-│  │       └─────────────────────────────────────────────────┘            │   │
-│  └──────────────────────────────────────────────────────────────────────┘   │
+│  ┌──────────────────────────────────────────────────────────────────────┐    │
+│  │               4. Hybrid File Detection                               │    │
+│  │       ┌─────────────────────────────────────────────────┐            │    │
+│  │       │  Markup Extensions (Always Analyze)             │            │    │
+│  │       │  html, jsx, tsx, vue, svelte, astro             │            │    │
+│  │       │  css, scss, sass, php, blade, erb, mdx          │            │    │
+│  │       └─────────────────────────────────────────────────┘            │    │
+│  │       ┌─────────────────────────────────────────────────┐            │    │
+│  │       │  Ambiguous Extensions (Content Scan)            │            │    │
+│  │       │  js, ts, mjs, cjs, py, rb, java                 │            │    │
+│  │       │  → Check for JSX, templates, inline styles      │            │    │
+│  │       └─────────────────────────────────────────────────┘            │    │
+│  └──────────────────────────────────────────────────────────────────────┘    │
 │                                   │                                          │
 │                                   ▼                                          │
-│  ┌──────────────────────────────────────────────────────────────────────┐   │
-│  │                    5. Batch Processing                               │   │
-│  │                        - Split into 20-file batches                   │   │
-│  │                        - Add [N] position markers                    │   │
-│  │                        - Estimate tokens (chars/4)                    │   │
-│  └──────────────────────────────────────────────────────────────────────┘   │
+│  ┌──────────────────────────────────────────────────────────────────────┐    │
+│  │                    5. Batch Processing                               │    │
+│  │                        - Split into 20-file batches                  │    │
+│  │                        - Add [N] position markers                    │    │
+│  │                        - Estimate tokens (chars/4)                   │    │
+│  └──────────────────────────────────────────────────────────────────────┘    │
 │                                   │                                          │
 │                                   ▼                                          │
-│  ┌──────────────────────────────────────────────────────────────────────┐   │
-│  │                     6. LLM Analysis                                  │   │
-│  │        ┌─────────────────────┬─────────────────────┐                │   │
-│  │        │      Gemini         │      Ollama         │                │   │
-│  │        │  - JSON Schema      │  - Bearer Token     │                │   │
-│  │        │  - 0.1 Temperature  │  - format: 'json'   │                │   │
-│  │        │  - Safety Filters   │  - num_ctx: 32768   │                │   │
-│  │        └─────────────────────┴─────────────────────┘                │   │
-│  │                        - WCAG 2.2 System Prompt                     │   │
-│  │                        - JSON Response Validation                   │   │
-│  └──────────────────────────────────────────────────────────────────────┘   │
+│  ┌──────────────────────────────────────────────────────────────────────┐    │
+│  │                     6. LLM Analysis                                  │    │
+│  │   ┌──────────────┬──────────────┬──────────────────────────────┐     │    │
+│  │   │    Gemini    │    Ollama    │         OpenRouter           │     │    │
+│  │   │  JSON Schema │  format:json│  200+ models via single key   │     │    │
+│  │   │  0.1 Temp    │  num_ctx 32k│  json_object response format  │     │    │
+│  │   └──────────────┴──────────────┴──────────────────────────────┘     │    │
+│  │                        - WCAG 2.2 System Prompt                      │    │
+│  │                        - JSON Response Validation                    │    │
+│  └──────────────────────────────────────────────────────────────────────┘    │
 │                                   │                                          │
 │                                   ▼                                          │
-│  ┌──────────────────────────────────────────────────────────────────────┐   │
-│  │                 7. Completeness Verification                         │   │
-│  │                        - Count <img>, <input>, <button>            │   │
-│  │                        - Check against reported issues              │   │
-│  │                        - Log warnings for gaps                      │   │
-│  └──────────────────────────────────────────────────────────────────────┘   │
+│  ┌──────────────────────────────────────────────────────────────────────┐    │
+│  │                 7. Completeness Verification                         │    │
+│  │                        - Count <img>, <input>, <button>              │    │
+│  │                        - Check against reported issues               │    │
+│  │                        - Log warnings for gaps                       │    │
+│  └──────────────────────────────────────────────────────────────────────┘    │
 │                                   │                                          │
 │                                   ▼                                          │
-│  ┌──────────────────────────────────────────────────────────────────────┐   │
-│  │                    8. Post Results                                   │   │
-│  │        ┌─────────────────────┬─────────────────────┐                │   │
-│  │        │   Check Runs        │   PR Comments       │                │   │
-│  │        │   (Recommended)     │   (Alternative)     │                │   │
-│  │        │   - Max 50 annot.   │   - Inline reviews  │                │   │
-│  │        │   - Branch status   │   - Files Changed   │                │   │
-│  │        │   - Clean UI        │   - Direct feedback │                │   │
-│  │        └─────────────────────┴─────────────────────┘                │   │
-│  └──────────────────────────────────────────────────────────────────────┘   │
+│  ┌──────────────────────────────────────────────────────────────────────┐    │
+│  │                    8. Post Results                                   │    │
+│  │        ┌─────────────────────┬─────────────────────┐                 │    │
+│  │        │   Check Runs        │   PR Comments       │                 │    │
+│  │        │   (Recommended)     │   (Alternative)     │                 │    │
+│  │        │   - Max 50 annot.   │   - Inline reviews  │                 │    │
+│  │        │   - Branch status   │   - Files Changed   │                 │    │
+│  │        │   - Clean UI        │   - Direct feedback │                 │    │
+│  │        └─────────────────────┴─────────────────────┘                 │    │
+│  └──────────────────────────────────────────────────────────────────────┘    │
 │                                   │                                          │
 │                                   ▼                                          │
-│  ┌──────────────────────────────────────────────────────────────────────┐   │
-│  │                   9. Set Outputs                                     │   │
-│  │                        - issues-found: Total count                  │   │
-│  │                        - violations: CRITICAL + SERIOUS             │   │
-│  │                        - good-practices: MODERATE + MINOR            │   │
-│  └──────────────────────────────────────────────────────────────────────┘   │
+│  ┌──────────────────────────────────────────────────────────────────────┐    │
+│  │                   9. Set Outputs                                     │    │
+│  │                        - issues-found: Total count                   │    │
+│  │                        - violations: CRITICAL + SERIOUS              │    │
+│  │                        - good-practices: MODERATE + MINOR            │    │
+│  └──────────────────────────────────────────────────────────────────────┘    │
 │                                   │                                          │
 │                                   ▼                                          │
-│  ┌──────────────────────────────────────────────────────────────────────┐   │
-│  │             10. Workflow Result (if fail-on-issues: true)            │   │
-│  │                        - Fail if violations > 0                      │   │
-│  │                        - Pass if only good practices                  │   │
-│  └──────────────────────────────────────────────────────────────────────┘   │
+│  ┌──────────────────────────────────────────────────────────────────────┐    │
+│  │             10. Workflow Result (if fail-on-issues: true)            │    │
+│  │                        - Fail if violations > 0                      │    │
+│  │                        - Pass if only good practices                 │    │
+│  └──────────────────────────────────────────────────────────────────────┘    │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -167,6 +166,7 @@ Add your API key to repository secrets:
 
 - **Gemini**: `GEMINI_API_KEY` (Get from [Google AI Studio](https://aistudio.google.com/app/apikey))
 - **Ollama**: `OLLAMA_API_KEY` (Get from [Ollama Cloud Settings](https://ollama.com/settings/keys))
+- **OpenRouter**: `OPENROUTER_API_KEY` (Get from [OpenRouter Keys](https://openrouter.ai/keys))
 
 ### 2. Create Workflow
 
@@ -198,7 +198,7 @@ jobs:
           gitleaks version
 
       - name: Run Accessibility Review
-        uses: your-org/ax-review@v1
+        uses: rtCamp/ax-review@v1.2.0
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           llm-provider: gemini
@@ -229,6 +229,10 @@ Navigate to: `Settings` → `Secrets and variables` → `Actions` → `New repos
 **For Ollama:**
 - Name: `OLLAMA_API_KEY`
 - Value: Your API key from [Ollama Cloud Settings](https://ollama.com/settings/keys)
+
+**For OpenRouter:**
+- Name: `OPENROUTER_API_KEY`
+- Value: Your API key from [OpenRouter Keys](https://openrouter.ai/keys)
 
 #### 2. Create Workflow File
 
@@ -275,9 +279,9 @@ If you're running your own Ollama server:
 | Input | Required | Default | Description |
 |-------|----------|---------|-------------|
 | `github-token` | Yes | `${{ github.token }}` | GitHub API token for PR operations |
-| `llm-provider` | Yes | `gemini` | LLM provider: `gemini` or `ollama` |
-| `api-key` | Yes* | — | API key for LLM provider (**Required for both Gemini and Ollama**) |
-| `model` | No | Provider default | Model name (e.g., `gemini-2.0-flash`, `minimax-m2.7:cloud`) |
+| `llm-provider` | Yes | `gemini` | LLM provider: `gemini`, `ollama`, or `openrouter` |
+| `api-key` | Yes | — | API key for the chosen provider |
+| `model` | No | Provider default | Model name (e.g. `gemini-2.0-flash`, `deepseek/deepseek-v4-pro`) |
 | `ollama-url` | No | `https://ollama.com` | Ollama Cloud or self-hosted server URL |
 | `output-mode` | No | `checks` | Output format: `checks` (recommended) or `comments` |
 | `fail-on-issues` | No | `true` | Fail workflow on VIOLATION issues |
@@ -286,7 +290,7 @@ If you're running your own Ollama server:
 | `skip-drafts` | No | `true` | Skip analysis for draft PRs |
 | `a11y-findings-dir` | No | — | Path to accessibility findings generated by external tools |
 
-\* **Note:** `api-key` is required for both Gemini and Ollama Cloud. The Ollama free tier no longer supports anonymous access.
+\* **Note:** `api-key` is required for all providers.
 
 ### Default Models
 
@@ -294,6 +298,7 @@ If you're running your own Ollama server:
 |----------|---------------|-------------------------|
 | Gemini | `gemini-3-flash-preview` | `gemini-2.5-pro`, `gemini-2.5-flash` |
 | Ollama | `minimax-m2.7:cloud` | `kimi-k2.5:cloud`, `glm-5:cloud` |
+| OpenRouter | `deepseek/deepseek-v4-pro` | `openai/gpt-4o-mini`, `anthropic/claude-3-haiku`, `google/gemini-2.0-flash-001` |
 
 ### Outputs
 
@@ -628,7 +633,8 @@ ax-review/
 │   │   ├── types.ts          # LLM interfaces
 │   │   ├── base.ts           # Abstract client with retry logic
 │   │   ├── gemini.ts         # Google Gemini client
-│   │   └── ollama.ts         # Ollama Cloud client
+│   │   ├── ollama.ts         # Ollama Cloud client
+│   │   └── openrouter.ts     # OpenRouter client
 │   ├── github/
 │   │   ├── client.ts         # GitHub API wrapper
 │   │   ├── pr.ts             # PR file fetching
@@ -699,10 +705,15 @@ BaseLLMClient (abstract)
     │   ├── validateConfig()
     │   └── isRateLimitError()
     │
-    └── OllamaClient
-        ├── analyze()      // Ollama SDK (format: 'json')
-        ├── validateConfig()
-        └── handleError()
+    ├── OllamaClient
+    │   ├── analyze()      // Ollama SDK (format: 'json')
+    │   ├── validateConfig()
+    │   └── handleError()
+    │
+    └── OpenRouterClient
+        ├── analyze()      // OpenAI-compatible REST API
+        ├── validateConfig() 
+        └── isRetryableStatus()
 ```
 
 **Adding a new provider:**
@@ -840,7 +851,8 @@ All inputs are validated to prevent injection attacks:
 
 ```yaml
 api-key: ${{ secrets.GEMINI_API_KEY }}  # or
-api-key: ${{ secrets.OLLAMA_API_KEY }}
+api-key: ${{ secrets.OLLAMA_API_KEY }}  # or
+api-key: ${{ secrets.OPENROUTER_API_KEY }}
 ```
 
 For Ollama Cloud, get your key from [ollama.com/settings/keys](https://ollama.com/settings/keys).

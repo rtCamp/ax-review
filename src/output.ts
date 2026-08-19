@@ -60,17 +60,23 @@ async function postReview(
   prNumber: number,
   headSha: string,
   issues: A11yIssue[],
-  failedBatches: FailedBatch[]
+  failedBatches: FailedBatch[],
+  existingComment: { id: number; body: string } | null | undefined,
+  baseSha: string | null | undefined
 ): Promise<void> {
-  const existing = await github.findSummaryComment(prNumber);
+  const existing = existingComment !== undefined
+    ? existingComment
+    : await github.findSummaryComment(prNumber);
 
-  if (!existing) {
-    // First run: post the full dashboard
-    const body = formatFirstRunSummary(issues, failedBatches);
-    await github.createIssueComment(prNumber, body);
+  if (!existing || baseSha == null) {
+    const body = formatFirstRunSummary(issues, failedBatches, headSha);
+    if (existing) {
+      await github.updateIssueComment(existing.id, body);
+    } else {
+      await github.createIssueComment(prNumber, body);
+    }
   } else {
-    // Subsequent push: update in place with minimal delta
-    const body = formatDeltaSummary(issues, failedBatches, headSha, existing.body);
+    const body = formatDeltaSummary(issues, failedBatches, baseSha, headSha);
     await github.updateIssueComment(existing.id, body);
   }
 
@@ -270,10 +276,12 @@ export async function postResults(
   headSha: string,
   issues: A11yIssue[],
   failedBatches: FailedBatch[],
-  outputMode: 'comments' | 'checks'
+  outputMode: 'comments' | 'checks',
+  existingComment?: { id: number; body: string } | null,
+  baseSha?: string | null
 ): Promise<void> {
   if (outputMode === 'comments') {
-    await postReview(github, prNumber, headSha, issues, failedBatches);
+    await postReview(github, prNumber, headSha, issues, failedBatches, existingComment, baseSha);
   } else {
     await postCheckRun(github, headSha, issues, failedBatches);
   }

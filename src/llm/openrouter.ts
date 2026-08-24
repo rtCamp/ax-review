@@ -102,9 +102,7 @@ export class OpenRouterClient extends BaseLLMClient {
   async analyze(systemPrompt: string, userPrompt: string): Promise<AnalysisResult> {
     try {
       return await this.executeWithRetry(
-        async () => {
-          const signal = this.createTimeoutSignal();
-
+        async (signal) => {
           const response = await fetch(`${this.baseUrl}/chat/completions`, {
             method: 'POST',
             signal,

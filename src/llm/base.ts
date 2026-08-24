@@ -100,7 +100,7 @@ export abstract class BaseLLMClient {
    * }
    */
   protected async executeWithRetry<T>(
-    request: () => Promise<T>,
+    request: (signal: AbortSignal) => Promise<T>,
     extractContent: (response: T) => string,
     isRetryable: (error: Error) => boolean,
     providerName: string
@@ -116,32 +116,32 @@ export abstract class BaseLLMClient {
 
       try {
         // Execute the provider-specific request
-        const response = await request();
-        
+        const response = await request(controller.signal);
+
         // Extract text content from response (provider-specific)
         const content = extractContent(response);
-        
+
         // Parse and validate JSON response
         return this.parseJsonResponse(content);
-        
+
       } catch (error) {
         // Normalize error to consistent Error type
         lastError = this.normalizeError(error, this.timeout);
-        
+
         // Check if we should retry
         const canRetry = isRetryable(lastError);
         const hasRetriesLeft = attempt < LLM_LIMITS.MAX_RETRIES - 1;
-        
+
         if (canRetry && hasRetriesLeft) {
           // Exponential backoff: 1s, 2s, 4s
           const delay = LLM_LIMITS.BASE_DELAY_MS * Math.pow(2, attempt);
           await this.sleep(delay);
           continue;
         }
-        
+
         // Either not retryable or out of retries - break and throw
         break;
-        
+
       } finally {
         // Always clear timeout to prevent memory leaks
         clearTimeout(timeoutId);

@@ -44,7 +44,7 @@ jobs:
           gitleaks version
 
       - name: Run Accessibility Review
-        uses: rtCamp/ax-review@v1.1.0
+        uses: rtCamp/ax-review@v1.2.1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           llm-provider: ollama

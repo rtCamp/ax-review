@@ -198,11 +198,12 @@ jobs:
           gitleaks version
 
       - name: Run Accessibility Review
-        uses: rtCamp/ax-review@v1.2.0
+        uses: rtCamp/ax-review@v1.2.1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          llm-provider: gemini
-          api-key: ${{ secrets.GEMINI_API_KEY }}
+          llm-provider: openrouter
+          model: google/gemini-3.7-flash
+          api-key: ${{ secrets.OPENROUTER_API_KEY }}
 ```
 
 ### 3. Open a PR
@@ -281,7 +282,7 @@ If you're running your own Ollama server:
 | `github-token` | Yes | `${{ github.token }}` | GitHub API token for PR operations |
 | `llm-provider` | Yes | `gemini` | LLM provider: `gemini`, `ollama`, or `openrouter` |
 | `api-key` | Yes | — | API key for the chosen provider |
-| `model` | No | Provider default | Model name (e.g. `gemini-2.0-flash`, `deepseek/deepseek-v4-pro`) |
+| `model` | No | Provider default | Model name (e.g. `gemini-3.7-flash`, `antropic/claude-sonnet-5`) |
 | `ollama-url` | No | `https://ollama.com` | Ollama Cloud or self-hosted server URL |
 | `output-mode` | No | `checks` | Output format: `checks` (recommended) or `comments` |
 | `fail-on-issues` | No | `true` | Fail workflow on VIOLATION issues |
@@ -296,9 +297,9 @@ If you're running your own Ollama server:
 
 | Provider | Default Model | Recommended Alternatives |
 |----------|---------------|-------------------------|
-| Gemini | `gemini-3-flash-preview` | `gemini-2.5-pro`, `gemini-2.5-flash` |
+| Gemini | `gemini-3.7-flash` | `gemini-2.5-pro`, `gemini-2.5-flash` |
 | Ollama | `minimax-m2.7:cloud` | `kimi-k2.5:cloud`, `glm-5:cloud` |
-| OpenRouter | `deepseek/deepseek-v4-pro` | `openai/gpt-4o-mini`, `anthropic/claude-3-haiku`, `google/gemini-2.0-flash-001` |
+| OpenRouter | `google/gemini-3.7-flash` | `openai/gpt-4o-mini`, `anthropic/claude-3-haiku`, `google/gemini-2.0-flash-001` |
 
 ### Outputs
 

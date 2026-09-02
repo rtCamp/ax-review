@@ -8,7 +8,7 @@
  * // Create client
  * const client = new OpenRouterClient({
  *   apiKey: process.env.OPENROUTER_API_KEY,
- *   model: 'deepseek/deepseek-v4-pro',
+ *   model: 'google/gemini-3.7-flash',
  * });
  *
  * // Analyze diff content
@@ -21,7 +21,7 @@ import { BaseLLMClient } from './base';
 import { LLM_LIMITS } from '../constants';
 import { recordLLMUsage } from '../utils/llm-usage';
 
-const DEFAULT_MODEL = 'deepseek/deepseek-v4-pro';
+const DEFAULT_MODEL = 'google/gemini-3.7-flash';
 const DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1';
 
 // Raw response shapes (before schema validation)
@@ -62,7 +62,7 @@ export class OpenRouterClient extends BaseLLMClient {
    *
    * @param config - Configuration options
    * @param config.apiKey  - OpenRouter API key (required)
-   * @param config.model   - Model slug (default: 'deepseek/deepseek-v4-pro')
+   * @param config.model   - Model slug (default: 'google/gemini-3.7-flash')
    * @param config.baseUrl - API base URL (default: 'https://openrouter.ai/api/v1')
    * @param config.timeout - Request timeout in ms (default: LLM_LIMITS.DEFAULT_TIMEOUT_MS)
    */
@@ -236,7 +236,7 @@ export class OpenRouterClient extends BaseLLMClient {
         `${original}\n\nTroubleshooting:\n` +
         `1. Model '${this.model}' may not be available on OpenRouter\n` +
         `2. Browse available models at https://openrouter.ai/models\n` +
-        `3. Update the 'model' input in your workflow to a valid slug (e.g. deepseek/deepseek-v4-pro)`
+        `3. Update the 'model' input in your workflow to a valid slug (e.g. google/gemini-3.7-flash)`
       );
     }
 
@@ -254,7 +254,7 @@ export class OpenRouterClient extends BaseLLMClient {
         `${original}\n\nTroubleshooting:\n` +
         `1. The request timed out after ${this.timeout}ms\n` +
         `2. Large PRs may need more time — reduce 'batch-size'\n` +
-        `3. Try a faster model (e.g. deepseek/deepseek-v4-pro, openai/gpt-4o-mini)`
+        `3. Try a faster model (e.g. google/gemini-3.5-flash-lite, openai/gpt-4o-mini)`
       );
     }
 
@@ -271,7 +271,7 @@ export class OpenRouterClient extends BaseLLMClient {
       return (
         `${original}\n\nTroubleshooting:\n` +
         `1. The model did not return valid JSON\n` +
-        `2. Some models ignore response_format — try deepseek/deepseek-v4-pro or openai/gpt-4o-mini\n` +
+        `2. Some models ignore response_format — try google/gemini-3.7-flash or openai/gpt-4o-mini\n` +
         `3. Reduce 'batch-size' so the prompt fits within the model's context window`
       );
     }

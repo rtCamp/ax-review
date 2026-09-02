@@ -58,13 +58,13 @@ export function createLLMClient(
 export function getDefaultModel(provider: LLMProvider): string {
   switch (provider) {
     case 'gemini':
-      return 'gemini-2.0-flash';
+      return 'gemini-3.7-flash';
     case 'ollama':
-      return 'llama3.2';
+      return 'minimax-m2.7:cloud';
     case 'openrouter':
-      return 'deepseek/deepseek-v4-pro';
+      return 'google/gemini-3.7-flash';
     default:
-      return 'gemini-2.0-flash';
+      return 'gemini-3.7-flash';
   }
 }
 

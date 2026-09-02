@@ -49,12 +49,12 @@ export const MAX_LENGTHS = {
  */
 export function validateUrl(url: string): string {
   const sanitized = url.trim();
-  
+
   // Length check
   if (sanitized.length > MAX_LENGTHS.url) {
     throw new Error(`URL exceeds maximum length of ${MAX_LENGTHS.url} characters`);
   }
-  
+
   // Parse URL
   let parsedUrl: URL;
   try {
@@ -62,23 +62,23 @@ export function validateUrl(url: string): string {
   } catch {
     throw new Error(`Invalid URL: '${sanitized}' is not a valid URL`);
   }
-  
+
   // Only allow http and https schemes
   if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
     throw new Error(
       `Invalid URL scheme: '${parsedUrl.protocol}'. Only http: and https: are allowed.`
     );
   }
-  
+
   // Block internal IP addresses
   const hostname = parsedUrl.hostname.toLowerCase();
-  
+
   // Block localhost variants
   if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '0.0.0.0') {
     // Explicitly allowed for local development
     return sanitized;
   }
-  
+
   // Block private IP ranges
   if (isPrivateIpAddress(hostname)) {
     throw new Error(
@@ -86,7 +86,7 @@ export function validateUrl(url: string): string {
       `Access to internal networks is not allowed for security reasons.`
     );
   }
-  
+
   return sanitized;
 }
 
@@ -107,44 +107,44 @@ export function validateUrl(url: string): string {
 export function isPrivateIpAddress(hostname: string): boolean {
   const ipV4Pattern = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
   const match = hostname.match(ipV4Pattern);
-  
+
   if (match) {
     const o1 = parseInt(match[1]!, 10);
     const o2 = parseInt(match[2]!, 10);
     const o3 = parseInt(match[3]!, 10);
     const o4 = parseInt(match[4]!, 10);
-    
+
     // Invalid IP if any octet > 255
     if (o1 > 255 || o2 > 255 || o3 > 255 || o4 > 255) {
       return false;
     }
-    
+
     // 10.0.0.0/8 - Class A private
     if (o1 === 10) {
       return true;
     }
-    
+
     // 172.16.0.0/12 - Class B private
     if (o1 === 172 && o2 >= 16 && o2 <= 31) {
       return true;
     }
-    
+
     // 192.168.0.0/16 - Class C private
     if (o1 === 192 && o2 === 168) {
       return true;
     }
-    
+
     // 169.254.0.0/16 - Link-local
     if (o1 === 169 && o2 === 254) {
       return true;
     }
   }
-  
+
   // IPv6 private ranges (simplified check)
   if (hostname.startsWith('fc') || hostname.startsWith('fd') || hostname.startsWith('fe80::')) {
     return true;
   }
-  
+
   return false;
 }
 
@@ -164,15 +164,15 @@ export function isPrivateIpAddress(hostname: string): boolean {
  */
 export function validateApiKey(apiKey: string, minRequiredLength = 20): string {
   if (!apiKey) return '';
-  
+
   // Length check
   if (apiKey.length > MAX_LENGTHS.apiKey) {
     throw new Error(`API key exceeds maximum length of ${MAX_LENGTHS.apiKey} characters`);
   }
-  
+
   // Remove any whitespace
   const sanitized = apiKey.trim();
-  
+
   // If key is provided, check it's valid
   if (sanitized && sanitized.length < minRequiredLength) {
     throw new Error(
@@ -180,12 +180,12 @@ export function validateApiKey(apiKey: string, minRequiredLength = 20): string {
       `got ${sanitized.length}.`
     );
   }
-  
+
   // Check for control characters
   if (/[\x00-\x1F\x7F]/.test(sanitized)) {
     throw new Error('API key contains invalid control characters');
   }
-  
+
   return sanitized;
 }
 
@@ -204,15 +204,15 @@ export function validateApiKey(apiKey: string, minRequiredLength = 20): string {
  * @example
  * validateModelName('gemini-2.0-flash'); // OK
  * validateModelName('llama3.2:latest'); // OK
- * validateModelName('deepseek/deepseek-v4-pro'); // OK
+ * validateModelName('google/gemini-3.7-flash'); // OK
  * validateModelName('google/gemma-4-26b-a4b-it:free'); // OK
  * validateModelName('../../etc/passwd'); // Error - path traversal
  */
 export function validateModelName(model: string): string {
   if (!model) return '';
-  
+
   const sanitized = model.trim();
-  
+
   if (sanitized.length > MAX_LENGTHS.model) {
     throw new Error(`Model name exceeds maximum length of ${MAX_LENGTHS.model} characters`);
   }
@@ -223,6 +223,6 @@ export function validateModelName(model: string): string {
       `Only alphanumeric characters, dots, dashes, underscores, colons, and forward slashes are allowed.`
     );
   }
-  
+
   return sanitized;
 }

@@ -62,7 +62,7 @@ export interface LLMClient {
 export interface GeminiConfig {
   /** Gemini API key (required) */
   apiKey: string;
-  /** Model name (default: gemini-2.0-flash) */
+  /** Model name (default: gemini-3.7-flash) */
   model?: string;
   /** Request timeout in milliseconds (default: 60000) */
   timeout?: number;
@@ -74,7 +74,7 @@ export interface GeminiConfig {
 export interface OllamaConfig {
   /** API key from ollama.com (required for cloud access) */
   apiKey: string;
-  /** Model name (default: llama3.2) */
+  /** Model name (default: minimax-m2.7:cloud) */
   model?: string;
   /** Ollama Cloud API endpoint (default: https://ollama.com) */
   baseUrl?: string;
@@ -86,7 +86,7 @@ export interface OllamaConfig {
 export interface OpenRouterConfig {
   /** OpenRouter API key (required) */
   apiKey: string;
-  /** Model slug (default: deepseek/deepseek-v4-pro) */
+  /** Model slug (default: google/gemini-3.7-flash) */
   model?: string;
   /** API base URL (default: https://openrouter.ai/api/v1) */
   baseUrl?: string;

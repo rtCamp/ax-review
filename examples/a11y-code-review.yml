@@ -6,7 +6,7 @@ on:
 
 jobs:
   a11y-review:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted]
     permissions:
       contents: read
       pull-requests: write
@@ -26,9 +26,9 @@ jobs:
         uses: rtCamp/ax-review@v1.2.1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          llm-provider: ollama
-          model: gpt-oss:120b-cloud
-          api-key: ${{ secrets.OLLAMA_API_KEY }}
+          llm-provider: openrouter
+          model: google/gemini-3.7-flash
+          api-key: ${{ secrets.OPENROUTER_API_KEY }}
           output-mode: comments
           fail-on-issues: true
           max-files: 50

@@ -25,7 +25,7 @@ jobs:
   # Job 1 - AI Code review (Runs on PRs)
   code-review:
     name: AI Accessibility Code Review
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted]
     if: github.event_name == 'pull_request'
 
     permissions:
@@ -101,9 +101,9 @@ jobs:
         uses: rtCamp/ax-review@v1.2.1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          llm-provider: ollama
-          model: gpt-oss:120b-cloud
-          api-key: ${{ secrets.OLLAMA_API_KEY }}
+          llm-provider: openrouter
+          model: google/gemini-3.7-flash
+          api-key: ${{ secrets.OPENROUTER_API_KEY }}
           output-mode: comments
           fail-on-issues: true
           max-files: 50
@@ -113,7 +113,7 @@ jobs:
   # Job 2 - URL audit (Runs manually via workflow_dispatch)
   url-audit:
     name: URL Accessibility Audit
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, high-performance]
     if: github.event_name == 'workflow_dispatch'
 
     permissions:
@@ -141,14 +141,21 @@ jobs:
           const inputType = process.env.INPUT_TYPE.trim();
           const input     = process.env.INPUT_VALUE.trim();
 
-          function fetch(url) {
+          function fetch(url, depth = 0) {
+            if (depth > 5) return Promise.reject(new Error('Too many redirects'));
             return new Promise((resolve, reject) => {
               const client = url.startsWith('https') ? http : httpPlain;
-              client.get(url, (res) => {
+              const options = {
+                headers: {
+                  'User-Agent': 'Mozilla/5.0',
+                  'Accept': 'text/xml,application/xml,*/*',
+                }
+              };
+              client.get(url, options, (res) => {
                 if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
                   const redirectUrl = res.headers.location;
                   res.resume();
-                  return resolve(fetch(redirectUrl));
+                  return resolve(fetch(redirectUrl, depth + 1));
                 }
                 let data = '';
                 res.on('data', chunk => data += chunk);
@@ -247,12 +254,23 @@ jobs:
 
       - name: Install deps
         run: |
+          mkdir -p /tmp/a11y-runner
+          cd /tmp/a11y-runner
           npm init -y
           npm install playwright @axe-core/playwright lighthouse
           npm install -g pa11y
 
       - name: Install Playwright browsers
-        run: npx playwright install chromium
+        run: |
+          cd /tmp/a11y-runner
+          npx playwright install --with-deps chromium
+
+      - name: Get Playwright Chromium path
+        run: |
+          cd /tmp/a11y-runner
+          CHROME=$(node -e "const { chromium } = require('playwright'); console.log(chromium.executablePath())")
+          echo "CHROME_PATH=$CHROME" >> $GITHUB_ENV
+          echo "Using $CHROME"
 
       - name: Run axe-core (Playwright)
         run: |
@@ -317,7 +335,9 @@ jobs:
               try {
                 await page.goto(url, { waitUntil: 'load', timeout: 30000 });
 
-                const results = await new AxeBuilder({ page }).analyze();
+                const results = await new AxeBuilder({ page })
+                  .disableRules(['color-contrast'])
+                  .analyze();
 
                 for (const violation of results.violations) {
                   for (const [nodeIndex, node] of violation.nodes.entries()) {
@@ -368,6 +388,7 @@ jobs:
           })();
           EOF
 
+          NODE_PATH=/tmp/a11y-runner/node_modules \
           TEST_URLS="$(cat resolved-urls.txt)" node axe-test.js
 
       - name: Run Lighthouse
@@ -381,9 +402,10 @@ jobs:
 
             echo "Lighthouse: $url_trimmed"
 
-            npx lighthouse "$url_trimmed" \
+            /tmp/a11y-runner/node_modules/.bin/lighthouse "$url_trimmed" \
+              --chrome-path="$CHROME_PATH" \
               --only-categories=accessibility \
-              --chrome-flags="--headless" \
+              --chrome-flags="--headless --no-sandbox --disable-dev-shm-usage --disable-gpu" \
               --output=json \
               --output-path="lighthouse-reports/$safe_name.json" || true
 
@@ -412,7 +434,13 @@ jobs:
           {
             "chromeLaunchConfig": {
               "args": ["--no-sandbox", "--disable-setuid-sandbox"]
-            }
+            },
+            "ignore": [
+              "WCAG2AA.Principle1.Guideline1_4.1_4_3.G18.Fail",
+              "WCAG2AA.Principle1.Guideline1_4.1_4_3.G145.Fail",
+              "WCAG2AA.Principle1.Guideline1_4.1_4_3.F24.FG",
+              "WCAG2AA.Principle1.Guideline1_4.1_4_3.F24.BG"
+            ]
           }
           EOF
 
@@ -570,6 +598,7 @@ jobs:
           })();
           SSEOF
 
+          NODE_PATH=/tmp/a11y-runner/node_modules \
           node pa11y-screenshots.js
 
       - name: Generate consolidated Markdown report

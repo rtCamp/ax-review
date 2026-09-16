@@ -159,20 +159,20 @@ jobs:
 
       - name: Install deps
         run: |
-          mkdir -p /tmp/a11y-runner
-          cd /tmp/a11y-runner
+          mkdir -p /tmp/a11y-runner-${{ github.run_id }}
+          cd /tmp/a11y-runner-${{ github.run_id }}
           npm init -y
           npm install playwright @axe-core/playwright lighthouse
           npm install -g pa11y
 
       - name: Install Playwright browsers
         run: |
-          cd /tmp/a11y-runner
+          cd /tmp/a11y-runner-${{ github.run_id }}
           npx playwright install --with-deps chromium
 
       - name: Get Playwright Chromium path
         run: |
-          cd /tmp/a11y-runner
+          cd /tmp/a11y-runner-${{ github.run_id }}
           CHROME=$(node -e "const { chromium } = require('playwright'); console.log(chromium.executablePath())")
           echo "CHROME_PATH=$CHROME" >> $GITHUB_ENV
           echo "Using $CHROME"
@@ -293,7 +293,7 @@ jobs:
           })();
           EOF
 
-          NODE_PATH=/tmp/a11y-runner/node_modules \
+          NODE_PATH=/tmp/a11y-runner-${{ github.run_id }}/node_modules \
           TEST_URLS="$(cat resolved-urls.txt)" node axe-test.js
 
       - name: Run Lighthouse
@@ -307,7 +307,7 @@ jobs:
 
             echo "Lighthouse: $url_trimmed"
 
-            /tmp/a11y-runner/node_modules/.bin/lighthouse "$url_trimmed" \
+            /tmp/a11y-runner-${{ github.run_id }}/node_modules/.bin/lighthouse "$url_trimmed" \
               --chrome-path="$CHROME_PATH" \
               --only-categories=accessibility \
               --chrome-flags="--headless --no-sandbox --disable-dev-shm-usage --disable-gpu" \
@@ -503,7 +503,7 @@ jobs:
           })();
           SSEOF
 
-          NODE_PATH=/tmp/a11y-runner/node_modules \
+          NODE_PATH=/tmp/a11y-runner-${{ github.run_id }}/node_modules \
           node pa11y-screenshots.js
 
       - name: Generate consolidated Markdown report
@@ -905,3 +905,7 @@ jobs:
               body,
               labels: ['accessibility'],
             });
+
+      - name: Cleanup runner temp dir
+        if: always()
+        run: rm -rf /tmp/a11y-runner-${{ github.run_id }}

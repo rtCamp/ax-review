@@ -88,8 +88,8 @@ function getNumberInput(name: string, defaultValue: number): number {
 
 function parseLLMProvider(value: string): LLMProvider {
   const normalized = value.toLowerCase().trim();
-  if (normalized !== 'gemini' && normalized !== 'ollama' && normalized !== 'openrouter') {
-    throw new Error(`Invalid llm-provider '${value}'. Must be 'gemini', 'ollama', or 'openrouter'.`);
+  if (normalized !== 'gemini' && normalized !== 'ollama' && normalized !== 'openrouter' && normalized !== 'litellm') {
+    throw new Error(`Invalid llm-provider '${value}'. Must be 'gemini', 'ollama', 'openrouter', or 'litellm'.`);
   }
   return normalized;
 }
@@ -144,6 +144,21 @@ function validateProviderConfig(provider: LLMProvider, apiKey?: string): void {
       throw new Error(
         "The provided OpenRouter API key appears to be invalid. " +
         "API keys from openrouter.ai are typically longer strings."
+      );
+    }
+  }
+
+  if (provider === 'litellm') {
+    if (!apiKey || apiKey.trim() === '') {
+      throw new Error(
+        "API key is required when using 'litellm' provider. " +
+        "Set the master key or a virtual key from your LiteLLM proxy in the 'api-key' input."
+      );
+    }
+    if (apiKey.length < 10) {
+      throw new Error(
+        "The provided LiteLLM API key appears to be invalid. " +
+        "LiteLLM keys are typically longer strings."
       );
     }
   }

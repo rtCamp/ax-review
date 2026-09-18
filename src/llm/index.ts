@@ -6,10 +6,11 @@
  */
 
 import type { LLMProvider } from '../types';
-import type { LLMClient, GeminiConfig, OllamaConfig, OpenRouterConfig } from './types';
+import type { LLMClient, GeminiConfig, OllamaConfig, OpenRouterConfig, LiteLLMConfig } from './types';
 import { GeminiClient } from './gemini';
 import { OllamaClient } from './ollama';
 import { OpenRouterClient } from './openrouter';
+import { LiteLLMClient } from './litellm';
 import { LLMError } from './types';
 
 /**
@@ -22,7 +23,7 @@ import { LLMError } from './types';
  */
 export function createLLMClient(
   provider: LLMProvider,
-  config: GeminiConfig | OllamaConfig | OpenRouterConfig
+  config: GeminiConfig | OllamaConfig | OpenRouterConfig | LiteLLMConfig
 ): LLMClient {
   switch (provider) {
     case 'gemini': {
@@ -40,11 +41,17 @@ export function createLLMClient(
       }
       return new OpenRouterClient(config as OpenRouterConfig);
     }
+    case 'litellm': {
+      if (!('apiKey' in config) || !config.apiKey) {
+        throw new LLMError('LiteLLM provider requires an API key', undefined, false);
+      }
+      return new LiteLLMClient(config as LiteLLMConfig);
+    }
     default: {
       // TypeScript exhaustiveness check
       const _exhaustiveCheck: never = provider;
       throw new LLMError(
-        `Unknown LLM provider: ${String(_exhaustiveCheck)}. Supported providers: gemini, ollama, openrouter`,
+        `Unknown LLM provider: ${String(_exhaustiveCheck)}. Supported providers: gemini, ollama, openrouter, litellm`,
         undefined,
         false
       );
@@ -63,6 +70,8 @@ export function getDefaultModel(provider: LLMProvider): string {
       return 'minimax-m2.7:cloud';
     case 'openrouter':
       return 'google/gemini-3.7-flash';
+    case 'litellm':
+      return 'openrouter/google/gemini-3.7-flash';
     default:
       return 'gemini-3.7-flash';
   }
@@ -76,7 +85,7 @@ export function buildLLMConfig(
   apiKey: string | undefined,
   model: string | undefined,
   ollamaUrl: string
-): GeminiConfig | OllamaConfig | OpenRouterConfig {
+): GeminiConfig | OllamaConfig | OpenRouterConfig | LiteLLMConfig {
   switch (provider) {
     case 'gemini': {
       return {
@@ -102,6 +111,19 @@ export function buildLLMConfig(
       if (!apiKey) {
         throw new LLMError(
           'OpenRouter requires an API key. Get your key from https://openrouter.ai/keys',
+          undefined,
+          false
+        );
+      }
+      return {
+        apiKey,
+        model: model ?? getDefaultModel(provider),
+      };
+    }
+    case 'litellm': {
+      if (!apiKey) {
+        throw new LLMError(
+          'LiteLLM requires an API key. Set the master key or a virtual key from your LiteLLM proxy.',
           undefined,
           false
         );

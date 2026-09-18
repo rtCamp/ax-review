@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-green.svg)](https://nodejs.org/)
 
-Automated WCAG 2.2 accessibility review for pull requests using LLMs (Gemini, Ollama, or OpenRouter).
+Automated WCAG 2.2 accessibility review for pull requests using LLMs (Gemini, Ollama, OpenRouter, or LiteLLM).
 
 ## Why ax-review?
 
@@ -111,11 +111,11 @@ This complements PR diff analysis by validating the fully rendered deployed expe
 │                                   ▼                                          │
 │  ┌──────────────────────────────────────────────────────────────────────┐    │
 │  │                     6. LLM Analysis                                  │    │
-│  │   ┌──────────────┬──────────────┬──────────────────────────────┐     │    │
-│  │   │    Gemini    │    Ollama    │         OpenRouter           │     │    │
-│  │   │  JSON Schema │  format:json│  200+ models via single key   │     │    │
-│  │   │  0.1 Temp    │  num_ctx 32k│  json_object response format  │     │    │
-│  │   └──────────────┴──────────────┴──────────────────────────────┘     │    │
+│  │   ┌─────────────┬───────────┬────────────────────┬──────────────┐    │    │
+│  │   │   Gemini    │   Ollama  │     OpenRouter     │   LiteLLM    │    │    │
+│  │   │ JSON Schema │ format:js │ 200+ models, 1 key │ Any upstream │    │    │
+│  │   │  0.1 Temp   │  ctx 32k  │ json_object format │  via proxy   │    │    │
+│  │   └─────────────┴───────────┴────────────────────┴──────────────┘    │    │
 │  │                        - WCAG 2.2 System Prompt                      │    │
 │  │                        - JSON Response Validation                    │    │
 │  └──────────────────────────────────────────────────────────────────────┘    │
@@ -167,6 +167,7 @@ Add your API key to repository secrets:
 - **Gemini**: `GEMINI_API_KEY` (Get from [Google AI Studio](https://aistudio.google.com/app/apikey))
 - **Ollama**: `OLLAMA_API_KEY` (Get from [Ollama Cloud Settings](https://ollama.com/settings/keys))
 - **OpenRouter**: `OPENROUTER_API_KEY` (Get from [OpenRouter Keys](https://openrouter.ai/keys))
+- **LiteLLM**: `LITELLM_API_KEY` (Master key or virtual key configured in your LiteLLM proxy)
 
 ### 2. Create Workflow
 
@@ -235,6 +236,10 @@ Navigate to: `Settings` → `Secrets and variables` → `Actions` → `New repos
 - Name: `OPENROUTER_API_KEY`
 - Value: Your API key from [OpenRouter Keys](https://openrouter.ai/keys)
 
+**For LiteLLM:**
+- Name: `LITELLM_API_KEY`
+- Value: Master key or a virtual key from your LiteLLM proxy config
+
 #### 2. Create Workflow File
 
 Create `.github/workflows/a11y-review.yml` with your preferred configuration (see [Usage Examples](#usage-examples)).
@@ -280,9 +285,9 @@ If you're running your own Ollama server:
 | Input | Required | Default | Description |
 |-------|----------|---------|-------------|
 | `github-token` | Yes | `${{ github.token }}` | GitHub API token for PR operations |
-| `llm-provider` | Yes | `gemini` | LLM provider: `gemini`, `ollama`, or `openrouter` |
+| `llm-provider` | Yes | `gemini` | LLM provider: `gemini`, `ollama`, `openrouter`, or `litellm` |
 | `api-key` | Yes | — | API key for the chosen provider |
-| `model` | No | Provider default | Model name (e.g. `gemini-3.7-flash`, `antropic/claude-sonnet-5`) |
+| `model` | No | Provider default | Model name (e.g. `gemini-3.7-flash`, `openrouter/google/gemini-3.7-flash`) |
 | `ollama-url` | No | `https://ollama.com` | Ollama Cloud or self-hosted server URL |
 | `output-mode` | No | `checks` | Output format: `checks` (recommended) or `comments` |
 | `fail-on-issues` | No | `true` | Fail workflow on VIOLATION issues |
@@ -300,6 +305,7 @@ If you're running your own Ollama server:
 | Gemini | `gemini-3.7-flash` | `gemini-2.5-pro`, `gemini-2.5-flash` |
 | Ollama | `minimax-m2.7:cloud` | `kimi-k2.5:cloud`, `glm-5:cloud` |
 | OpenRouter | `google/gemini-3.7-flash` | `openai/gpt-4o-mini`, `anthropic/claude-3-haiku`, `google/gemini-2.0-flash-001` |
+| LiteLLM | `openrouter/google/gemini-3.7-flash` | Any model slug configured in your proxy (e.g. `openrouter/anthropic/claude-sonnet-4-5`) |
 
 ### Outputs
 
@@ -635,7 +641,8 @@ ax-review/
 │   │   ├── base.ts           # Abstract client with retry logic
 │   │   ├── gemini.ts         # Google Gemini client
 │   │   ├── ollama.ts         # Ollama Cloud client
-│   │   └── openrouter.ts     # OpenRouter client
+│   │   ├── openrouter.ts     # OpenRouter client
+│   │   └── litellm.ts        # LiteLLM gateway client
 │   ├── github/
 │   │   ├── client.ts         # GitHub API wrapper
 │   │   ├── pr.ts             # PR file fetching
@@ -711,8 +718,13 @@ BaseLLMClient (abstract)
     │   ├── validateConfig()
     │   └── handleError()
     │
-    └── OpenRouterClient
-        ├── analyze()      // OpenAI-compatible REST API
+    ├── OpenRouterClient
+    │   ├── analyze()      // OpenAI-compatible REST API
+    │   ├── validateConfig()
+    │   └── isRetryableStatus()
+    │
+    └── LiteLLMClient
+        ├── analyze()      // OpenAI-compatible REST API via LiteLLM proxy
         ├── validateConfig() 
         └── isRetryableStatus()
 ```
@@ -846,14 +858,15 @@ All inputs are validated to prevent injection attacks:
 
 #### "API key is required" Error
 
-**Problem:** Both Gemini and Ollama Cloud now require API keys.
+**Problem:** All providers (Gemini, Ollama, OpenRouter, LiteLLM) require API keys.
 
 **Solution:** Ensure `api-key` input is provided:
 
 ```yaml
-api-key: ${{ secrets.GEMINI_API_KEY }}  # or
-api-key: ${{ secrets.OLLAMA_API_KEY }}  # or
-api-key: ${{ secrets.OPENROUTER_API_KEY }}
+api-key: ${{ secrets.GEMINI_API_KEY }}        # Gemini
+api-key: ${{ secrets.OLLAMA_API_KEY }}        # Ollama
+api-key: ${{ secrets.OPENROUTER_API_KEY }}    # OpenRouter
+api-key: ${{ secrets.LITELLM_API_KEY }}       # LiteLLM
 ```
 
 For Ollama Cloud, get your key from [ollama.com/settings/keys](https://ollama.com/settings/keys).

@@ -88,8 +88,6 @@ export interface OpenRouterConfig {
   apiKey: string;
   /** Model slug (default: google/gemini-3.7-flash) */
   model?: string;
-  /** API base URL (default: https://openrouter.ai/api/v1) */
-  baseUrl?: string;
   /** Request timeout in milliseconds (default: LLM_LIMITS.DEFAULT_TIMEOUT_MS) */
   timeout?: number;
 }
@@ -102,8 +100,6 @@ export interface LiteLLMConfig {
   apiKey: string;
   /** Model slug routed by the proxy (default: openrouter/google/gemini-3.7-flash) */
   model?: string;
-  /** LiteLLM proxy base URL (default: https://litellm.rstuff.in/v1) */
-  baseUrl?: string;
   /** Request timeout in milliseconds (default: LLM_LIMITS.DEFAULT_TIMEOUT_MS) */
   timeout?: number;
 }

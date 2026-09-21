@@ -55,7 +55,6 @@ export class OpenRouterClient extends BaseLLMClient {
   public readonly provider = 'openrouter';
   private readonly apiKey: string;
   private readonly model: string;
-  private readonly baseUrl: string;
 
   /**
    * Create a new OpenRouter client.
@@ -63,7 +62,6 @@ export class OpenRouterClient extends BaseLLMClient {
    * @param config - Configuration options
    * @param config.apiKey  - OpenRouter API key (required)
    * @param config.model   - Model slug (default: 'google/gemini-3.7-flash')
-   * @param config.baseUrl - API base URL (default: 'https://openrouter.ai/api/v1')
    * @param config.timeout - Request timeout in ms (default: LLM_LIMITS.DEFAULT_TIMEOUT_MS)
    */
   constructor(config: OpenRouterConfig) {
@@ -87,7 +85,6 @@ export class OpenRouterClient extends BaseLLMClient {
 
     this.apiKey = config.apiKey;
     this.model = config.model ?? DEFAULT_MODEL;
-    this.baseUrl = (config.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, '');
     this.timeout = config.timeout ?? LLM_LIMITS.DEFAULT_TIMEOUT_MS;
   }
 
@@ -103,7 +100,7 @@ export class OpenRouterClient extends BaseLLMClient {
     try {
       return await this.executeWithRetry(
         async (signal) => {
-          const response = await fetch(`${this.baseUrl}/chat/completions`, {
+          const response = await fetch(`${DEFAULT_BASE_URL}/chat/completions`, {
             method: 'POST',
             signal,
             headers: {
@@ -179,7 +176,7 @@ export class OpenRouterClient extends BaseLLMClient {
    */
   async validateConfig(): Promise<boolean> {
     try {
-      const response = await fetch(`${this.baseUrl}/models`, {
+      const response = await fetch(`${DEFAULT_BASE_URL}/models`, {
         headers: { 'Authorization': `Bearer ${this.apiKey}` },
       });
       return response.ok;

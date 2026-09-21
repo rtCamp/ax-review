@@ -9,7 +9,6 @@
  * const client = new LiteLLMClient({
  *   apiKey: process.env.LITELLM_API_KEY,
  *   model: 'openrouter/google/gemini-3.7-flash',
- *   baseUrl: 'https://litellm.rstuff.in/v1',
  * });
  *
  * // Analyze diff content
@@ -56,7 +55,6 @@ export class LiteLLMClient extends BaseLLMClient {
   public readonly provider = 'litellm';
   private readonly apiKey: string;
   private readonly model: string;
-  private readonly baseUrl: string;
 
   /**
    * Create a new LiteLLM gateway client.
@@ -64,7 +62,6 @@ export class LiteLLMClient extends BaseLLMClient {
    * @param config - Configuration options
    * @param config.apiKey  - LiteLLM API key or master key (required)
    * @param config.model   - Model slug routed by the proxy (default: 'openrouter/google/gemini-3.7-flash')
-   * @param config.baseUrl - LiteLLM proxy base URL (default: 'https://litellm.rstuff.in/v1')
    * @param config.timeout - Request timeout in ms (default: LLM_LIMITS.DEFAULT_TIMEOUT_MS)
    */
   constructor(config: LiteLLMConfig) {
@@ -88,7 +85,6 @@ export class LiteLLMClient extends BaseLLMClient {
 
     this.apiKey = config.apiKey;
     this.model = config.model ?? DEFAULT_MODEL;
-    this.baseUrl = (config.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, '');
     this.timeout = config.timeout ?? LLM_LIMITS.DEFAULT_TIMEOUT_MS;
   }
 
@@ -104,7 +100,7 @@ export class LiteLLMClient extends BaseLLMClient {
     try {
       return await this.executeWithRetry(
         async (signal) => {
-          const response = await fetch(`${this.baseUrl}/chat/completions`, {
+          const response = await fetch(`${DEFAULT_BASE_URL}/chat/completions`, {
             method: 'POST',
             signal,
             headers: {
@@ -175,7 +171,7 @@ export class LiteLLMClient extends BaseLLMClient {
    */
   async validateConfig(): Promise<boolean> {
     try {
-      const response = await fetch(`${this.baseUrl}/models`, {
+      const response = await fetch(`${DEFAULT_BASE_URL}/models`, {
         headers: { 'Authorization': `Bearer ${this.apiKey}` },
       });
       return response.ok;
@@ -231,7 +227,7 @@ export class LiteLLMClient extends BaseLLMClient {
       return (
         `${original}\n\nTroubleshooting:\n` +
         `1. Model '${this.model}' may not be configured in your LiteLLM proxy\n` +
-        `2. Check the model list at ${this.baseUrl}/models\n` +
+        `2. Check the model list at ${DEFAULT_BASE_URL}/models\n` +
         `3. Update the 'model' input to a model slug your proxy exposes (e.g. openrouter/google/gemini-3.7-flash)`
       );
     }
@@ -250,7 +246,7 @@ export class LiteLLMClient extends BaseLLMClient {
         `${original}\n\nTroubleshooting:\n` +
         `1. The request timed out after ${this.timeout}ms\n` +
         `2. Large PRs may need more time — reduce 'batch-size'\n` +
-        `3. Check that your LiteLLM proxy (${this.baseUrl}) is reachable from the runner`
+        `3. Check that your LiteLLM proxy (${DEFAULT_BASE_URL}) is reachable from the runner`
       );
     }
 
@@ -258,7 +254,7 @@ export class LiteLLMClient extends BaseLLMClient {
       return (
         `${original}\n\nTroubleshooting:\n` +
         `1. Network connectivity issue — check internet connection\n` +
-        `2. Verify your LiteLLM proxy (${this.baseUrl}) is accessible from the runner\n` +
+        `2. Verify your LiteLLM proxy (${DEFAULT_BASE_URL}) is accessible from the runner\n` +
         `3. Check if a firewall or proxy is blocking the request`
       );
     }
@@ -274,7 +270,7 @@ export class LiteLLMClient extends BaseLLMClient {
 
     return (
       `${original}\n\nTroubleshooting:\n` +
-      `1. Provider: LiteLLM (${this.baseUrl})\n` +
+      `1. Provider: LiteLLM (${DEFAULT_BASE_URL})\n` +
       `2. Model: ${this.model}\n` +
       `3. Timeout: ${this.timeout}ms\n` +
       `4. Check your LiteLLM proxy logs for more details`

@@ -20,6 +20,7 @@ import { LLMError, type AnalysisResult, type OpenRouterConfig } from './types';
 import { BaseLLMClient } from './base';
 import { LLM_LIMITS } from '../constants';
 import { recordLLMUsage } from '../utils/llm-usage';
+import { isRetryableError, isRetryableStatus } from './retry';
 
 const DEFAULT_MODEL = 'google/gemini-3.7-flash';
 const DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1';
@@ -129,7 +130,7 @@ export class OpenRouterClient extends BaseLLMClient {
             throw new LLMError(
               `OpenRouter API error ${response.status}: ${response.statusText}. ${errorBody}`,
               undefined,
-              this.isRetryableStatus(response.status)
+              isRetryableStatus(response.status)
             );
           }
 
@@ -157,7 +158,7 @@ export class OpenRouterClient extends BaseLLMClient {
 
           return content;
         },
-        (error) => this.isRetryableError(error),
+        (error) => isRetryableError(error),
         'OpenRouter'
       );
     } catch (error) {
@@ -183,34 +184,6 @@ export class OpenRouterClient extends BaseLLMClient {
     } catch {
       return false;
     }
-  }
-
-  /**
-   * Determine if a non-2xx HTTP status code is worth retrying.
-   */
-  private isRetryableStatus(status: number): boolean {
-    return status === 429 || (status >= 500 && status < 600);
-  }
-
-  /**
-   * Determine if an error thrown during the request is retryable.
-   */
-  private isRetryableError(error: Error): boolean {
-    if (error instanceof LLMError) {
-      return error.isRetryable;
-    }
-    const msg = error.message.toLowerCase();
-    return (
-      msg.includes('429') ||
-      msg.includes('rate') ||
-      msg.includes('quota') ||
-      msg.includes('timeout') ||
-      msg.includes('econnrefused') ||
-      msg.includes('etimedout') ||
-      msg.includes('network') ||
-      msg.includes('fetch failed') ||
-      error.name === 'AbortError'
-    );
   }
 
   /**

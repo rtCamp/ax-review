@@ -12,12 +12,12 @@ inputs:
     default: '${{ github.token }}'
 
   llm-provider:
-    description: 'LLM provider to use (gemini, ollama, or openrouter)'
+    description: 'LLM provider to use (gemini, ollama, openrouter, or litellm)'
     required: true
     default: 'gemini'
 
   api-key:
-    description: 'API key for the LLM provider. Required for Gemini (https://aistudio.google.com/apikey), Ollama (https://ollama.com/settings/keys), and OpenRouter (https://openrouter.ai/keys).'
+    description: 'API key for the LLM provider. Required for Gemini (https://aistudio.google.com/apikey), Ollama (https://ollama.com/settings/keys), OpenRouter (https://openrouter.ai/keys), and LiteLLM (master key or virtual key from your proxy).'
     required: false
 
   model:

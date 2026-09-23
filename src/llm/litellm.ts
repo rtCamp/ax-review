@@ -1,14 +1,14 @@
 /**
- * OpenRouter API client implementation.
- * Uses the OpenAI-compatible REST API via native fetch.
+ * LiteLLM gateway client implementation.
+ * Uses the OpenAI-compatible REST API exposed by a LiteLLM proxy.
  *
- * @module llm/openrouter
+ * @module llm/litellm
  *
  * @example
  * // Create client
- * const client = new OpenRouterClient({
- *   apiKey: process.env.OPENROUTER_API_KEY,
- *   model: 'google/gemini-3.7-flash',
+ * const client = new LiteLLMClient({
+ *   apiKey: process.env.LITELLM_API_KEY,
+ *   model: 'openrouter/google/gemini-3.7-flash',
  * });
  *
  * // Analyze diff content
@@ -16,31 +16,31 @@
  * console.log(result.issues);
  */
 
-import { LLMError, type AnalysisResult, type OpenRouterConfig } from './types';
+import { LLMError, type AnalysisResult, type LiteLLMConfig } from './types';
 import { BaseLLMClient } from './base';
 import { LLM_LIMITS } from '../constants';
 import { recordLLMUsage } from '../utils/llm-usage';
 import { isRetryableError, isRetryableStatus } from './retry';
 
-const DEFAULT_MODEL = 'google/gemini-3.7-flash';
-const DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1';
+const DEFAULT_MODEL = 'openrouter/google/gemini-3.7-flash';
+const DEFAULT_BASE_URL = 'https://litellm.rstuff.in/v1';
 
 // Raw response shapes (before schema validation)
 
-interface OpenRouterUsage {
+interface LiteLLMUsage {
   prompt_tokens?: number;
   completion_tokens?: number;
 }
 
-interface OpenRouterChoice {
+interface LiteLLMChoice {
   message?: {
     content?: string | null;
   };
 }
 
-interface OpenRouterResponse {
-  choices?: OpenRouterChoice[];
-  usage?: OpenRouterUsage;
+interface LiteLLMResponse {
+  choices?: LiteLLMChoice[];
+  usage?: LiteLLMUsage;
   error?: {
     message?: string;
     code?: number | string;
@@ -48,29 +48,29 @@ interface OpenRouterResponse {
 }
 
 /**
- * OpenRouter client implementing the LLMClient interface.
+ * LiteLLM gateway client implementing the LLMClient interface.
  *
  * @extends BaseLLMClient
  */
-export class OpenRouterClient extends BaseLLMClient {
-  public readonly provider = 'openrouter';
+export class LiteLLMClient extends BaseLLMClient {
+  public readonly provider = 'litellm';
   private readonly apiKey: string;
   private readonly model: string;
 
   /**
-   * Create a new OpenRouter client.
+   * Create a new LiteLLM gateway client.
    *
    * @param config - Configuration options
-   * @param config.apiKey  - OpenRouter API key (required)
-   * @param config.model   - Model slug (default: 'google/gemini-3.7-flash')
+   * @param config.apiKey  - LiteLLM API key or master key (required)
+   * @param config.model   - Model slug routed by the proxy (default: 'openrouter/google/gemini-3.7-flash')
    * @param config.timeout - Request timeout in ms (default: LLM_LIMITS.DEFAULT_TIMEOUT_MS)
    */
-  constructor(config: OpenRouterConfig) {
+  constructor(config: LiteLLMConfig) {
     super();
 
     if (!config.apiKey) {
       throw new LLMError(
-        '[OpenRouter] API key is required. Get your key from https://openrouter.ai/keys',
+        '[LiteLLM] API key is required. Set the master key or a virtual key configured in your LiteLLM proxy.',
         undefined,
         false
       );
@@ -78,7 +78,7 @@ export class OpenRouterClient extends BaseLLMClient {
 
     if (config.apiKey.length < 10) {
       throw new LLMError(
-        `[OpenRouter] API key appears to be invalid (too short: ${config.apiKey.length} chars).`,
+        `[LiteLLM] API key appears to be invalid (too short: ${config.apiKey.length} chars).`,
         undefined,
         false
       );
@@ -107,8 +107,6 @@ export class OpenRouterClient extends BaseLLMClient {
             headers: {
               'Content-Type': 'application/json',
               'Authorization': `Bearer ${this.apiKey}`,
-              'HTTP-Referer': `${process.env['GITHUB_SERVER_URL'] ?? 'https://github.com'}/${process.env['GITHUB_REPOSITORY'] ?? ''}`.replace(/\/$/, ''),
-              'X-Title': process.env['GITHUB_REPOSITORY'] ?? 'ax-review',
             },
             body: JSON.stringify({
               model: this.model,
@@ -119,22 +117,19 @@ export class OpenRouterClient extends BaseLLMClient {
               stream: false,
               temperature: LLM_LIMITS.TEMPERATURE,
               response_format: { type: 'json_object' },
-              provider: {
-                allow_fallbacks: true,
-              },
             }),
           });
 
           if (!response.ok) {
             const errorBody = await response.text().catch(() => '');
             throw new LLMError(
-              `OpenRouter API error ${response.status}: ${response.statusText}. ${errorBody}`,
+              `LiteLLM API error ${response.status}: ${response.statusText}. ${errorBody}`,
               undefined,
               isRetryableStatus(response.status)
             );
           }
 
-          return response.json() as Promise<OpenRouterResponse>;
+          return response.json() as Promise<LiteLLMResponse>;
         },
 
         (raw) => {
@@ -149,8 +144,8 @@ export class OpenRouterClient extends BaseLLMClient {
 
           if (!content) {
             throw new LLMError(
-              'OpenRouter returned an empty response. ' +
-              'The model may not support json_object response format. Try a different model.',
+              'LiteLLM returned an empty response. ' +
+              'The upstream model may not support json_object response format. Try a different model.',
               undefined,
               false
             );
@@ -159,7 +154,7 @@ export class OpenRouterClient extends BaseLLMClient {
           return content;
         },
         (error) => isRetryableError(error),
-        'OpenRouter'
+        'LiteLLM'
       );
     } catch (error) {
       const originalMessage = error instanceof Error ? error.message : String(error);
@@ -173,7 +168,7 @@ export class OpenRouterClient extends BaseLLMClient {
   }
 
   /**
-   * Validate that the OpenRouter API key is working by listing available models.
+   * Validate the LiteLLM gateway is reachable by calling the models endpoint.
    */
   async validateConfig(): Promise<boolean> {
     try {
@@ -195,8 +190,8 @@ export class OpenRouterClient extends BaseLLMClient {
     if (lower.includes('401') || lower.includes('unauthorized') || lower.includes('api key') || lower.includes('403')) {
       return (
         `${original}\n\nTroubleshooting:\n` +
-        `1. Check that your OpenRouter API key is set correctly\n` +
-        `2. Verify the key is valid at https://openrouter.ai/keys\n` +
+        `1. Check that your LiteLLM API key is set correctly\n` +
+        `2. Verify the key is valid in your LiteLLM proxy config\n` +
         `3. Ensure the key has not expired or been revoked`
       );
     }
@@ -204,18 +199,18 @@ export class OpenRouterClient extends BaseLLMClient {
     if (lower.includes('404') || lower.includes('not found') || lower.includes('model')) {
       return (
         `${original}\n\nTroubleshooting:\n` +
-        `1. Model '${this.model}' may not be available on OpenRouter\n` +
-        `2. Browse available models at https://openrouter.ai/models\n` +
-        `3. Update the 'model' input in your workflow to a valid slug (e.g. google/gemini-3.7-flash)`
+        `1. Model '${this.model}' may not be configured in your LiteLLM proxy\n` +
+        `2. Check the model list at ${DEFAULT_BASE_URL}/models\n` +
+        `3. Update the 'model' input to a model slug your proxy exposes (e.g. openrouter/google/gemini-3.7-flash)`
       );
     }
 
     if (lower.includes('429') || lower.includes('rate') || lower.includes('quota')) {
       return (
         `${original}\n\nTroubleshooting:\n` +
-        `1. Rate limit or quota exceeded\n` +
+        `1. Rate limit or quota exceeded on the upstream provider\n` +
         `2. Wait a few minutes before retrying\n` +
-        `3. Check your usage and limits at https://openrouter.ai/account`
+        `3. Check your LiteLLM proxy logs for quota details`
       );
     }
 
@@ -224,7 +219,7 @@ export class OpenRouterClient extends BaseLLMClient {
         `${original}\n\nTroubleshooting:\n` +
         `1. The request timed out after ${this.timeout}ms\n` +
         `2. Large PRs may need more time — reduce 'batch-size'\n` +
-        `3. Try a faster model (e.g. google/gemini-3.5-flash-lite, openai/gpt-4o-mini)`
+        `3. Check that your LiteLLM proxy (${DEFAULT_BASE_URL}) is reachable from the runner`
       );
     }
 
@@ -232,7 +227,7 @@ export class OpenRouterClient extends BaseLLMClient {
       return (
         `${original}\n\nTroubleshooting:\n` +
         `1. Network connectivity issue — check internet connection\n` +
-        `2. Verify https://openrouter.ai is accessible from your runner\n` +
+        `2. Verify your LiteLLM proxy (${DEFAULT_BASE_URL}) is accessible from the runner\n` +
         `3. Check if a firewall or proxy is blocking the request`
       );
     }
@@ -240,18 +235,18 @@ export class OpenRouterClient extends BaseLLMClient {
     if (lower.includes('json') || lower.includes('parse')) {
       return (
         `${original}\n\nTroubleshooting:\n` +
-        `1. The model did not return valid JSON\n` +
-        `2. Some models ignore response_format — try google/gemini-3.7-flash or openai/gpt-4o-mini\n` +
+        `1. The upstream model did not return valid JSON\n` +
+        `2. Some models ignore response_format — try openrouter/google/gemini-3.7-flash or openrouter/openai/gpt-4o-mini\n` +
         `3. Reduce 'batch-size' so the prompt fits within the model's context window`
       );
     }
 
     return (
       `${original}\n\nTroubleshooting:\n` +
-      `1. Provider: OpenRouter\n` +
+      `1. Provider: LiteLLM (${DEFAULT_BASE_URL})\n` +
       `2. Model: ${this.model}\n` +
       `3. Timeout: ${this.timeout}ms\n` +
-      `4. Check https://openrouter.ai/docs for API status and known issues`
+      `4. Check your LiteLLM proxy logs for more details`
     );
   }
 }

@@ -44,12 +44,12 @@ jobs:
           gitleaks version
 
       - name: Run Accessibility Review
-        uses: rtCamp/ax-review@v1.2.1
+        uses: rtCamp/ax-review@v1.3.0
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          llm-provider: openrouter
-          model: google/gemini-3.7-flash
-          api-key: ${{ secrets.OPENROUTER_API_KEY }}
+          llm-provider: litellm
+          model: openrouter/google/gemini-3.7-flash
+          api-key: ${{ secrets.LITELLM_API_KEY }}
           output-mode: comments
           fail-on-issues: true
           max-files: 50

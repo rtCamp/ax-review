@@ -6,7 +6,7 @@
  */
 
 import * as core from '@actions/core';
-import type { ActionConfig, LLMProvider, OutputMode } from './types';
+import type { ActionConfig, LLMProvider, OutputMode, WcagLevel } from './types';
 import { LLM_LIMITS, GITHUB_LIMITS, ACTION_DEFAULTS } from './constants';
 import { validateApiKey, validateUrl, validateModelName } from './utils/validation';
 
@@ -26,6 +26,8 @@ export function parseInputs(): ActionConfig {
   const batchSize = getNumberInput('batch-size', LLM_LIMITS.DEFAULT_BATCH_SIZE);
   const skipDrafts = getBooleanInput('skip-drafts', true);
   const findingsDir = getInput('a11y-findings-dir', '');
+  const excludePaths = parseExcludePaths(getInput('exclude-paths', ''));
+  const wcagLevels = parseWcagLevels(getInput('wcag-levels', 'A,AA,AAA'));
 
   // Log configuration (without exposing secrets)
   core.info(`Configuration: provider=${llmProvider}, model=${getInput('model', 'default')}, output=${outputMode}`);
@@ -54,6 +56,8 @@ export function parseInputs(): ActionConfig {
     batchSize,
     skipDrafts,
     findingsDir: findingsDir || undefined,
+    excludePaths,
+    wcagLevels,
   };
 }
 
@@ -100,6 +104,31 @@ function parseOutputMode(value: string): OutputMode {
     throw new Error(`Invalid output-mode '${value}'. Must be 'comments' or 'checks'.`);
   }
   return normalized;
+}
+
+function parseExcludePaths(raw: string): string[] {
+  return raw
+    .split('\n')
+    .map(p => p.trim())
+    .filter(p => p.length > 0);
+}
+
+/**
+ * Parse and validate the wcag-levels input.
+ * Accepts a comma-separated list of A, AA, AAA (case-insensitive).
+ */
+function parseWcagLevels(raw: string): WcagLevel[] {
+  const valid: WcagLevel[] = ['A', 'AA', 'AAA'];
+  const parsed = raw
+    .split(',')
+    .map(s => s.trim().toUpperCase() as WcagLevel)
+    .filter(s => valid.includes(s));
+
+  if (parsed.length === 0) {
+    core.warning(`'wcag-levels' input contained no valid values. Defaulting to A,AA,AAA.`);
+    return ['A', 'AA', 'AAA'];
+  }
+  return parsed;
 }
 
 function validateProviderConfig(provider: LLMProvider, apiKey?: string): void {

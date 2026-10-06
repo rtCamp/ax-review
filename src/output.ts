@@ -15,14 +15,15 @@
  */
 
 import * as core from '@actions/core';
-import type { A11yIssue, FailedBatch } from './types';
+import type { A11yIssue, FailedBatch, WcagLevel } from './types';
 import type { GitHubClient } from './github/client';
 import {
   formatIssueComment,
   formatCheckSummary,
   groupByFile,
   formatFirstRunSummary,
-  formatDeltaSummary
+  formatDeltaSummary,
+  filterByWcagLevels
 } from './utils/formatting';
 import { GITHUB_LIMITS } from './constants';
 import { extractAddedLines } from './utils/diff';
@@ -62,21 +63,22 @@ async function postReview(
   issues: A11yIssue[],
   failedBatches: FailedBatch[],
   existingComment: { id: number; body: string } | null | undefined,
-  baseSha: string | null | undefined
+  baseSha: string | null | undefined,
+  wcagLevels: WcagLevel[]
 ): Promise<void> {
   const existing = existingComment !== undefined
     ? existingComment
     : await github.findSummaryComment(prNumber);
 
   if (!existing || baseSha == null) {
-    const body = formatFirstRunSummary(issues, failedBatches, headSha);
+    const body = formatFirstRunSummary(issues, failedBatches, headSha, wcagLevels);
     if (existing) {
       await github.updateIssueComment(existing.id, body);
     } else {
       await github.createIssueComment(prNumber, body);
     }
   } else {
-    const body = formatDeltaSummary(issues, failedBatches, baseSha, headSha);
+    const body = formatDeltaSummary(issues, failedBatches, baseSha, headSha, wcagLevels);
     await github.updateIssueComment(existing.id, body);
   }
 
@@ -119,22 +121,17 @@ async function postCheckRun(
   github: GitHubClient,
   headSha: string,
   issues: A11yIssue[],
-  failedBatches: FailedBatch[]
+  failedBatches: FailedBatch[],
+  wcagLevels: WcagLevel[]
 ): Promise<void> {
-  // Count by severity
   const violations = issues.filter(isViolation).length;
   const goodPractices = issues.filter(i => i.severity === 'MINOR').length;
 
-  // Build annotations (limited to 50)
   const annotations = buildAnnotations(issues);
+  const summary = formatCheckSummary(issues, failedBatches, wcagLevels);
 
-  // Build summary text
-  const summary = formatCheckSummary(issues, failedBatches);
-
-  // Create the check run
   await github.createCheckRun(headSha, violations, goodPractices, summary, annotations);
 
-  // Warn if we hit the annotation limit
   if (issues.length > GITHUB_LIMITS.MAX_ANNOTATIONS) {
     core.warning(
       `Found ${issues.length} issues but only ${GITHUB_LIMITS.MAX_ANNOTATIONS} ` +
@@ -278,11 +275,20 @@ export async function postResults(
   failedBatches: FailedBatch[],
   outputMode: 'comments' | 'checks',
   existingComment?: { id: number; body: string } | null,
-  baseSha?: string | null
+  baseSha?: string | null,
+  wcagLevels: WcagLevel[] = ['A', 'AA', 'AAA']
 ): Promise<void> {
+  const filteredIssues = filterByWcagLevels(issues, wcagLevels);
+
+  if (filteredIssues.length < issues.length) {
+    core.info(
+      `WCAG level filter (${wcagLevels.join(', ')}): showing ${filteredIssues.length}/${issues.length} issues`
+    );
+  }
+
   if (outputMode === 'comments') {
-    await postReview(github, prNumber, headSha, issues, failedBatches, existingComment, baseSha);
+    await postReview(github, prNumber, headSha, filteredIssues, failedBatches, existingComment, baseSha, wcagLevels);
   } else {
-    await postCheckRun(github, headSha, issues, failedBatches);
+    await postCheckRun(github, headSha, filteredIssues, failedBatches, wcagLevels);
   }
 }

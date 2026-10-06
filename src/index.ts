@@ -32,6 +32,8 @@ import { analyzeFiles, type AnalysisContext } from './orchestrator';
 import { postResults } from './output';
 import { getRepoContext, getPRNumber } from './utils/context';
 import { calculateStats } from './utils/stats';
+import { applyPRSizeOverride } from './utils/batching';
+import { filterByWcagLevels } from './utils/formatting';
 
 /**
  * Main entry point for the GitHub Action.
@@ -96,18 +98,33 @@ export async function run(): Promise<void> {
       return;
     }
 
+    // Skip if the PR carries the `skip-a11y` label
+    if (prInfo.labels.includes('skip-a11y')) {
+      core.info('PR has "skip-a11y" label — accessibility review skipped');
+      await github.createReview(prNumber, prInfo.headSha, [],
+        '<!-- ax-review -->\n## Accessibility Review Skipped\n\n' +
+        'This PR is labelled **`skip-a11y`**. Analysis will be skipped for it.\n\n' +
+        'Remove the label to enable the review.'
+      );
+      setOutputs({ issuesFound: 0, violations: 0, goodPractices: 0 });
+      return;
+    }
+
+    // Apply PR-label-driven batch size / file limit override.
+    const effectiveConfig = applyPRSizeOverride(config, prInfo.labels);
+
     // -----------------------------------------------------------------------
     // Step 4: Initialize LLM client
     // -----------------------------------------------------------------------
     const llmConfig = buildLLMConfig(
-      config.llmProvider,
-      config.apiKey ?? undefined,
-      config.model ?? undefined,
-      config.ollamaUrl
+      effectiveConfig.llmProvider,
+      effectiveConfig.apiKey ?? undefined,
+      effectiveConfig.model ?? undefined,
+      effectiveConfig.ollamaUrl
     );
 
-    const llm: LLMClient = createLLMClient(config.llmProvider, llmConfig);
-    core.info(`${config.llmProvider} client initialized${config.model ? ` with model ${config.model}` : ''}`);
+    const llm: LLMClient = createLLMClient(effectiveConfig.llmProvider, llmConfig);
+    core.info(`${effectiveConfig.llmProvider} client initialized${effectiveConfig.model ? ` with model ${effectiveConfig.model}` : ''}`);
 
     // -----------------------------------------------------------------------
     // Step 5: Run analysis
@@ -115,7 +132,7 @@ export async function run(): Promise<void> {
     const context: AnalysisContext = {
       github,
       llm,
-      config,
+      config: effectiveConfig,
       owner,
       repo,
       prNumber,
@@ -141,21 +158,26 @@ export async function run(): Promise<void> {
     // -----------------------------------------------------------------------
     // Step 6: Post results
     // -----------------------------------------------------------------------
+
+    const wcagLevels = effectiveConfig.wcagLevels;
+    const filteredIssues = filterByWcagLevels(result.issues, wcagLevels);
+
     await postResults(
       github,
       prNumber,
       prInfo.headSha,
       result.issues,
       result.failedBatches,
-      config.outputMode,
+      effectiveConfig.outputMode,
       result.existingComment,
-      result.baseSha
+      result.baseSha,
+      wcagLevels
     );
 
     // -----------------------------------------------------------------------
     // Step 7: Set outputs
     // -----------------------------------------------------------------------
-    const stats = calculateStats(result.issues);
+    const stats = calculateStats(filteredIssues);
     setOutputs({
       issuesFound: stats.total,
       violations: stats.violations,
@@ -165,7 +187,7 @@ export async function run(): Promise<void> {
     // -----------------------------------------------------------------------
     // Step 8: Handle failure conditions
     // -----------------------------------------------------------------------
-    if (config.failOnIssues && stats.violations > 0) {
+    if (effectiveConfig.failOnIssues && stats.violations > 0) {
       const message = result.failedBatches.length > 0
         ? `Found ${stats.violations} accessibility violations (${result.failedBatches.length} batches had processing errors)`
         : `Found ${stats.violations} accessibility violations`;

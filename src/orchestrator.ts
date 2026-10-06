@@ -180,7 +180,19 @@ export async function analyzeFiles(context: AnalysisContext): Promise<AnalysisRe
 
   // Step 2: Filter to web files for accessibility analysis
   const filteredFiles = allFiles.filter(f => !shouldSkipFile(f));
-  const webFiles = filterWebFiles(filteredFiles);
+
+  // Apply user-configured path exclusions
+  const afterExclusion = config.excludePaths.length > 0
+    ? filteredFiles.filter(f => !config.excludePaths.some(prefix => f.filename.startsWith(prefix)))
+    : filteredFiles;
+
+  if (afterExclusion.length < filteredFiles.length) {
+    core.info(
+      `Excluded ${filteredFiles.length - afterExclusion.length} file(s) matching exclude-paths patterns`
+    );
+  }
+
+  const webFiles = filterWebFiles(afterExclusion);
 
   if (webFiles.length === 0) {
     core.info('No web files found to analyze');
@@ -194,7 +206,7 @@ export async function analyzeFiles(context: AnalysisContext): Promise<AnalysisRe
     };
   }
 
-  core.info(`Analyzing ${webFiles.length} web files (${filteredFiles.length - webFiles.length} non-web files skipped)`);
+  core.info(`Analyzing ${webFiles.length} web files (${afterExclusion.length - webFiles.length} non-web files skipped)`);
 
   // Step 3: Scan for secrets and redact them
   core.info('Scanning for secrets...');

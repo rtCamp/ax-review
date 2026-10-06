@@ -53,6 +53,10 @@ export class GitHubClient {
       pull_number: prNumber,
     });
 
+    const labels = (pr.labels ?? []).map(label =>
+      typeof label === 'string' ? label : label?.name ?? ''
+    ).filter(Boolean);
+
     return {
       number: pr.number,
       title: pr.title,
@@ -64,6 +68,7 @@ export class GitHubClient {
       author: pr.user?.login ?? 'unknown',
       owner: this.owner,
       repo: this.repo,
+      labels,
     };
   }
 

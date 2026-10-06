@@ -149,6 +149,9 @@ export interface PRInfo {
 
   /** Repository name */
   repo: string;
+
+  /** PR label names */
+  labels: string[];
 }
 
 /**
@@ -212,6 +215,8 @@ export interface ActionConfig {
   batchSize: number;
   skipDrafts: boolean;
   findingsDir?: string | undefined;
+  excludePaths: string[];
+  wcagLevels: WcagLevel[];
 }
 
 /**

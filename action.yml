@@ -58,6 +58,28 @@ inputs:
     description: 'Optional path to a directory containing pre-generated a11y reports from earlier workflow steps (used for baseline context).'
     required: false
 
+  exclude-paths:
+    description: |
+      Newline-separated list of path prefixes to exclude from accessibility scanning.
+      Example:
+        exclude-paths: |
+          vendor/
+          wp-content/plugins/third-party/
+          public/assets/lib/
+    required: false
+    default: ''
+
+  wcag-levels:
+    description: |
+      Comma-separated list of WCAG conformance levels to include in the report.
+      Valid values: A, AA, AAA (case-insensitive).
+      Use this to restrict reporting to specific levels:
+        - 'A'        — Critical blockers only
+        - 'A,AA'     — Standard legal baseline (most common)
+        - 'A,AA,AAA' — Full audit including enhanced criteria (default)
+    required: false
+    default: 'A,AA,AAA'
+
 outputs:
   issues-found:
     description: 'Total number of issues found'

@@ -15,7 +15,7 @@
  * const summary = formatCheckSummary(issues);
  */
 
-import type { A11yIssue, Severity, FailedBatch } from '../types';
+import type { A11yIssue, Severity, FailedBatch, WcagLevel } from '../types';
 
 /**
  * Icons for severity levels in review comments.
@@ -118,18 +118,19 @@ export function formatIssueComment(issue: A11yIssue): string {
 
 /**
  * Format an issue as a list item for summary sections.
- * 
+ *
  * @param issue - The issue to format
  * @returns Markdown list item string
- * 
+ *
  * @example
- * // Returns: "- **src/App.tsx:42**: Missing alt text (WCAG 1.1.1)"
+ * // Returns: "- 🟠 **Missing alt text** (WCAG 1.1.1) — `src/Card.tsx` (line 14)"
  * formatIssueListItem(issue);
  */
 export function formatIssueListItem(issue: A11yIssue): string {
   const line = issue.line ? ` (line ${issue.line})` : '';
   const title = escapeHtml(issue.title);
-  return `- **${title}** (WCAG ${issue.wcag_criterion}) — \`${issue.file}\`${line}`;
+  const icon = SEVERITY_ICONS[issue.severity];
+  return `- ${icon} **${title}** (WCAG ${issue.wcag_criterion}) — \`${issue.file}\`${line}`;
 }
 
 /**
@@ -209,7 +210,8 @@ export function formatReviewSummary(issues: A11yIssue[]): string {
 export function formatFirstRunSummary(
   issues: A11yIssue[],
   failedBatches: FailedBatch[],
-  headSha: string
+  headSha: string,
+  wcagLevels: WcagLevel[] = ['A', 'AA', 'AAA']
 ): string {
   const violations = issues.filter(i => i.severity !== 'MINOR');
   const goodPractices = issues.filter(i => i.severity === 'MINOR');
@@ -231,53 +233,8 @@ export function formatFirstRunSummary(
     ''
   ];
 
-  // Affected elements breakdown
-  if (violations.length > 0) {
-    lines.push('### Affected Elements', '');
-
-    const grouped = groupBySeverity(violations);
-
-    // Violations
-    for (const severity of Object.keys(grouped) as Severity[]) {
-      if (grouped[severity].length > 0) {
-        const icon = SEVERITY_ICONS[severity];
-        const severityTitle = SEVERITY_TITLES[severity];
-
-        lines.push(`#### ${icon} ${severityTitle} Issues (${grouped[severity].length})`);
-        lines.push('');
-        for (const issue of grouped[severity]) {
-          lines.push(formatIssueListItem(issue));
-        }
-        lines.push('');
-      }
-    }
-  }
-
-  // Good practices
-  if (goodPractices.length > 0) {
-    lines.push(`### 🔵 Good Practices (${goodPractices.length})`);
-    lines.push('');
-    lines.push('These are not violations but represent accessibility best practices:');
-    lines.push('');
-    for (const issue of goodPractices) {
-      lines.push(formatIssueListItem(issue));
-    }
-    lines.push('');
-  }
-
-  if (violations.length === 0) {
-    lines.push('**No WCAG 2.2 AA violations found.**', '');
-
-    if (goodPractices.length > 0) {
-      lines.push(
-        'Any suggestions above are minor improvements beyond the WCAG minimum and will not block this PR.'
-      );
-    } else {
-      lines.push(
-        'The changes pass accessibility requirements. Keep up the great work! 🎉'
-      );
-    }
-  }
+  lines.push(...formatWcagBreakdownTable(issues, wcagLevels));
+  lines.push(...formatIssuesByLevel(issues));
 
   if (failedBatches.length > 0) {
     lines.push(
@@ -298,7 +255,8 @@ export function formatDeltaSummary(
   issues: A11yIssue[],
   failedBatches: FailedBatch[],
   baseSha: string,
-  headSha: string
+  headSha: string,
+  wcagLevels: WcagLevel[] = ['A', 'AA', 'AAA']
 ): string {
   const violations = issues.filter(i => i.severity !== 'MINOR').length;
   const goodPractices = issues.filter(i => i.severity === 'MINOR');
@@ -318,22 +276,8 @@ export function formatDeltaSummary(
     '',
   ];
 
-  if (violations > 0 || goodPractices.length > 0) {
-    const grouped = groupBySeverity(issues);
-    for (const severity of Object.keys(grouped) as Array<keyof typeof grouped>) {
-      if (grouped[severity].length === 0) continue;
-      const icon = SEVERITY_ICONS[severity];
-      const title = SEVERITY_TITLES[severity];
-      lines.push(`### ${icon} ${title} Issues (${grouped[severity].length})`);
-      lines.push('');
-      for (const issue of grouped[severity]) {
-        lines.push(formatIssueListItem(issue));
-      }
-      lines.push('');
-    }
-  } else {
-    lines.push('**No new WCAG 2.2 AA violations in this push.** 🎉', '');
-  }
+  lines.push(...formatWcagBreakdownTable(issues, wcagLevels));
+  lines.push(...formatIssuesByLevel(issues));
 
   if (failedBatches.length > 0) {
     lines.push(
@@ -366,26 +310,38 @@ export function formatDeltaSummary(
  */
 export function formatCheckSummary(
   issues: A11yIssue[],
-  failedBatches: FailedBatch[] = []
+  failedBatches: FailedBatch[] = [],
+  wcagLevels: WcagLevel[] = ['A', 'AA', 'AAA']
 ): string {
   const grouped = groupBySeverity(issues);
+  const byLevel = groupByWcagLevel(issues);
+  const activeLabel = wcagLevels.length === 3 ? 'A, AA, AAA' : wcagLevels.join(', ');
 
   const parts: string[] = [
-    `**Total issues:** ${issues.length}`,
+    `**Total issues:** ${issues.length}  _(WCAG levels: ${activeLabel})_`,
     '',
   ];
 
-  if (grouped.CRITICAL.length > 0) {
-    parts.push(`🔴 **Critical:** ${grouped.CRITICAL.length}`);
-  }
-  if (grouped.SERIOUS.length > 0) {
-    parts.push(`🟠 **Serious:** ${grouped.SERIOUS.length}`);
-  }
-  if (grouped.MODERATE.length > 0) {
-    parts.push(`🟡 **Moderate:** ${grouped.MODERATE.length}`);
-  }
-  if (grouped.MINOR.length > 0) {
-    parts.push(`🔵 **Good practices:** ${grouped.MINOR.length}`);
+  // Severity counts
+  if (grouped.CRITICAL.length > 0) parts.push(`🔴 **Critical:** ${grouped.CRITICAL.length}`);
+  if (grouped.SERIOUS.length > 0) parts.push(`🟠 **Serious:** ${grouped.SERIOUS.length}`);
+  if (grouped.MODERATE.length > 0) parts.push(`🟡 **Moderate:** ${grouped.MODERATE.length}`);
+  if (grouped.MINOR.length > 0) parts.push(`🔵 **Good practices:** ${grouped.MINOR.length}`);
+
+  // WCAG level breakdown
+  parts.push('');
+  parts.push('**By WCAG Level:**');
+  const levelMeta: Record<WcagLevel, string> = {
+    A: 'Critical blockers',
+    AA: 'Standard legal baseline',
+    AAA: 'Enhanced / specialized',
+  };
+  for (const level of (['A', 'AA', 'AAA'] as WcagLevel[])) {
+    const active = wcagLevels.includes(level);
+    const count = byLevel[level].length;
+    if (active) {
+      parts.push(`- Level ${level} (${levelMeta[level]}): **${count}**`);
+    }
   }
 
   parts.push('');
@@ -463,8 +419,123 @@ export function formatWcagLevel(level: 'A' | 'AA' | 'AAA'): string {
 }
 
 /**
+ * Group issues by WCAG conformance level.
+ */
+export function groupByWcagLevel(issues: A11yIssue[]): Record<WcagLevel, A11yIssue[]> {
+  const grouped: Record<WcagLevel, A11yIssue[]> = { A: [], AA: [], AAA: [] };
+  for (const issue of issues) {
+    grouped[issue.wcag_level].push(issue);
+  }
+  return grouped;
+}
+
+/**
+ * Filter issues to only those matching the configured WCAG conformance levels.
+ *
+ * @param issues     - Full issue list from the LLM
+ * @param wcagLevels - Active levels; defaults to all three
+ * @returns Filtered array (may be the same reference when nothing is excluded)
+ */
+export function filterByWcagLevels(
+  issues: A11yIssue[],
+  wcagLevels: WcagLevel[] = ['A', 'AA', 'AAA']
+): A11yIssue[] {
+  return wcagLevels.length === 3
+    ? issues
+    : issues.filter(i => wcagLevels.includes(i.wcag_level));
+}
+
+/**
+ * Render issues grouped by WCAG level (A -> AA -> AAA) with severity icon inline.
+ *
+ * Violations (CRITICAL / SERIOUS / MODERATE) are listed under their WCAG level
+ * heading. MINOR issues (good practices) are appended as a final section.
+ * If there are no issues at all, a pass message is returned instead.
+ *
+ * @param issues - All issues (violations + good practices)
+ * @returns Array of markdown lines ready to spread into a lines array
+ */
+export function formatIssuesByLevel(issues: A11yIssue[]): string[] {
+  const violations = issues.filter(i => i.severity !== 'MINOR');
+  const goodPractices = issues.filter(i => i.severity === 'MINOR');
+
+  if (violations.length === 0 && goodPractices.length === 0) {
+    return ['**No WCAG 2.2 AA violations found.** 🎉', ''];
+  }
+
+  const lines: string[] = [];
+  const byLevel = groupByWcagLevel(violations);
+  const levelMeta: Record<WcagLevel, string> = {
+    A: 'Critical Blockers',
+    AA: 'Standard Legal Baseline',
+    AAA: 'Enhanced / Specialized',
+  };
+
+  for (const level of (['A', 'AA', 'AAA'] as WcagLevel[])) {
+    const levelIssues = byLevel[level];
+    if (levelIssues.length === 0) continue;
+
+    lines.push(`### Level ${level} — ${levelMeta[level]} (${levelIssues.length})`);
+    lines.push('');
+    for (const issue of levelIssues) {
+      lines.push(formatIssueListItem(issue));
+    }
+    lines.push('');
+  }
+
+  if (goodPractices.length > 0) {
+    lines.push(`### 🔵 Good Practices (${goodPractices.length})`);
+    lines.push('');
+    lines.push('These are not violations but represent accessibility best practices:');
+    lines.push('');
+    for (const issue of goodPractices) {
+      lines.push(formatIssueListItem(issue));
+    }
+    lines.push('');
+  }
+
+  return lines;
+}
+
+/**
+ * Build the WCAG Level Breakdown markdown table lines.
+ *
+ * @param issues     - Issues to summarise (already filtered to active levels)
+ * @param wcagLevels - Active WCAG levels; suppressed levels are struck-through
+ * @returns Array of markdown lines (ready to spread into a lines array)
+ */
+export function formatWcagBreakdownTable(
+  issues: A11yIssue[],
+  wcagLevels: WcagLevel[] = ['A', 'AA', 'AAA']
+): string[] {
+  const byLevel = groupByWcagLevel(issues);
+  const activeLabel = wcagLevels.length === 3 ? 'A, AA, AAA' : wcagLevels.join(', ');
+  const levelMeta: Record<WcagLevel, string> = {
+    A: 'Critical blockers',
+    AA: 'Standard legal baseline',
+    AAA: 'Enhanced / specialized',
+  };
+
+  const rows = (['A', 'AA', 'AAA'] as WcagLevel[]).map(level => {
+    const count = byLevel[level].length;
+    const active = wcagLevels.includes(level);
+    const cell = active ? `**${level}**` : `~~${level}~~`;
+    return `| ${cell} | ${levelMeta[level]} | ${active ? count : '—'} |`;
+  });
+
+  return [
+    `### WCAG Level Breakdown _(reporting: ${activeLabel})_`,
+    '',
+    '| Level | Description | Issues |',
+    '|-------|-------------|--------|',
+    ...rows,
+    '',
+  ];
+}
+
+/**
  * Group issues by severity.
- * 
+ *
  * @param issues - Issues to group
  * @returns Object with arrays of issues by severity
  */

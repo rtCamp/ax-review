@@ -66,6 +66,15 @@ export function applyPRSizeOverride(config: ActionConfig, labels: string[]): Act
 
   if (maxFiles === 0) return config;
 
+  if (maxFiles > PR_SIZE_OVERRIDE.MAX_FILES_CAP) {
+    core.warning(
+      `PR label "${matchedLabel}" requests ${maxFiles} files, ` +
+      `but the maximum allowed via label override is ${PR_SIZE_OVERRIDE.MAX_FILES_CAP}. ` +
+      `Clamping to ${PR_SIZE_OVERRIDE.MAX_FILES_CAP}.`
+    );
+    maxFiles = PR_SIZE_OVERRIDE.MAX_FILES_CAP;
+  }
+
   const batchSize =
     maxFiles <= 100 ? PR_SIZE_OVERRIDE.BATCH_SIZE_LG :
       maxFiles <= 500 ? PR_SIZE_OVERRIDE.BATCH_SIZE_XL :

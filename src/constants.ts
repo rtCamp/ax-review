@@ -66,6 +66,9 @@ export const PR_SIZE_OVERRIDE = {
   /** Regex to detect an override label and capture the file limit */
   LABEL_PATTERN: /^a11y-(\d+)$/,
 
+  /** Hard upper cap for the label-driven file limit */
+  MAX_FILES_CAP: 1500,
+
   /** Batch size to use when maxFiles <= 100 */
   BATCH_SIZE_LG: 20,
 

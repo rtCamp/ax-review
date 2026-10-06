@@ -33,6 +33,7 @@ import { postResults } from './output';
 import { getRepoContext, getPRNumber } from './utils/context';
 import { calculateStats } from './utils/stats';
 import { applyPRSizeOverride } from './utils/batching';
+import { filterByWcagLevels } from './utils/formatting';
 
 /**
  * Main entry point for the GitHub Action.
@@ -157,6 +158,10 @@ export async function run(): Promise<void> {
     // -----------------------------------------------------------------------
     // Step 6: Post results
     // -----------------------------------------------------------------------
+
+    const wcagLevels = effectiveConfig.wcagLevels;
+    const filteredIssues = filterByWcagLevels(result.issues, wcagLevels);
+
     await postResults(
       github,
       prNumber,
@@ -166,13 +171,13 @@ export async function run(): Promise<void> {
       effectiveConfig.outputMode,
       result.existingComment,
       result.baseSha,
-      effectiveConfig.wcagLevels
+      wcagLevels
     );
 
     // -----------------------------------------------------------------------
     // Step 7: Set outputs
     // -----------------------------------------------------------------------
-    const stats = calculateStats(result.issues);
+    const stats = calculateStats(filteredIssues);
     setOutputs({
       issuesFound: stats.total,
       violations: stats.violations,

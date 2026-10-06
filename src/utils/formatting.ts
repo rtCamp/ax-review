@@ -430,6 +430,22 @@ export function groupByWcagLevel(issues: A11yIssue[]): Record<WcagLevel, A11yIss
 }
 
 /**
+ * Filter issues to only those matching the configured WCAG conformance levels.
+ *
+ * @param issues     - Full issue list from the LLM
+ * @param wcagLevels - Active levels; defaults to all three
+ * @returns Filtered array (may be the same reference when nothing is excluded)
+ */
+export function filterByWcagLevels(
+  issues: A11yIssue[],
+  wcagLevels: WcagLevel[] = ['A', 'AA', 'AAA']
+): A11yIssue[] {
+  return wcagLevels.length === 3
+    ? issues
+    : issues.filter(i => wcagLevels.includes(i.wcag_level));
+}
+
+/**
  * Render issues grouped by WCAG level (A -> AA -> AAA) with severity icon inline.
  *
  * Violations (CRITICAL / SERIOUS / MODERATE) are listed under their WCAG level

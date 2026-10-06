@@ -22,7 +22,8 @@ import {
   formatCheckSummary,
   groupByFile,
   formatFirstRunSummary,
-  formatDeltaSummary
+  formatDeltaSummary,
+  filterByWcagLevels
 } from './utils/formatting';
 import { GITHUB_LIMITS } from './constants';
 import { extractAddedLines } from './utils/diff';
@@ -277,9 +278,7 @@ export async function postResults(
   baseSha?: string | null,
   wcagLevels: WcagLevel[] = ['A', 'AA', 'AAA']
 ): Promise<void> {
-  const filteredIssues = wcagLevels.length === 3
-    ? issues
-    : issues.filter(i => wcagLevels.includes(i.wcag_level));
+  const filteredIssues = filterByWcagLevels(issues, wcagLevels);
 
   if (filteredIssues.length < issues.length) {
     core.info(

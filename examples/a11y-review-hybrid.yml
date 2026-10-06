@@ -1,4 +1,4 @@
-name: Accessibility Review
+name: Accessibility Review Hybrid
 
 on:
   pull_request:
@@ -20,13 +20,22 @@ on:
         required: true
         default: "https://example.com"
 
-jobs:
+permissions: {}
 
-  # Job 1 - AI Code review (Runs on PRs)
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  # Job 1: AI Code review (Runs on PRs)
   code-review:
     name: AI Accessibility Code Review
-    runs-on: [self-hosted]
+    runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
+    timeout-minutes: 30
 
     permissions:
       contents: read
@@ -35,70 +44,477 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 
-      - name: Install Gitleaks
+      - name: Fetch base branch for diff
+        run: git fetch origin ${{ github.base_ref }} --depth=1
+
+      - name: Install & run Gitleaks
         run: |
+          set -euo pipefail
           curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz | tar -xz
           sudo mv gitleaks /usr/local/bin/gitleaks
           gitleaks version
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: '22'
-
-      - name: Install accessibility tools (Pa11y)
-        run: |
-          npm install -g pa11y
+          gitleaks detect --source . --redact --no-banner
 
       - name: Collect changed files
+        id: changed-files
         run: |
-          git diff \
-            --name-only \
-            origin/${{ github.base_ref }} \
-            HEAD \
-            > changed-files.txt
+          set -euo pipefail
 
-          echo "Changed files:"
-          cat changed-files.txt || true
+          BASE_REF="origin/${{ github.base_ref }}"
 
-      - name: Create Pa11y config
+          git diff --name-only --diff-filter=ACMR "$BASE_REF" HEAD > changed-files.txt || true
+
+          grep -E '\.(jsx?|tsx?)$' changed-files.txt > changed-jsx.txt  || true
+          grep -E '\.php$'         changed-files.txt > changed-php.txt  || true
+          grep -E '\.html$'        changed-files.txt > changed-html.txt || true
+
+          jsx_count=$(wc  -l < changed-jsx.txt  | tr -d ' ')
+          php_count=$(wc  -l < changed-php.txt  | tr -d ' ')
+          html_count=$(wc -l < changed-html.txt | tr -d ' ')
+
+          echo "jsx_count=$jsx_count"   >> "$GITHUB_OUTPUT"
+          echo "php_count=$php_count"   >> "$GITHUB_OUTPUT"
+          echo "html_count=$html_count" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare a11y findings directory
+        run: mkdir -p .a11y-results
+
+      - name: Setup Node
+        if: steps.changed-files.outputs.jsx_count != '0' || steps.changed-files.outputs.php_count != '0' || steps.changed-files.outputs.html_count != '0'
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22"
+
+      - name: Install npm dependencies
+        if: steps.changed-files.outputs.jsx_count != '0' || steps.changed-files.outputs.php_count != '0' || steps.changed-files.outputs.html_count != '0'
+        run: |
+          npm install --prefix .a11y-tools \
+            eslint \
+            eslint-plugin-jsx-a11y \
+            @typescript-eslint/parser \
+            pa11y
+
+      - name: Write Pa11y config
+        if: steps.changed-files.outputs.php_count != '0' || steps.changed-files.outputs.html_count != '0'
         run: |
           cat > pa11y.json << 'EOF'
           {
             "chromeLaunchConfig": {
-              "args": ["--no-sandbox", "--disable-setuid-sandbox"]
+              "args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
             }
           }
           EOF
 
-      - name: Run Pa11y on changed files
+      - name: Write ESLint a11y config
+        if: steps.changed-files.outputs.jsx_count != '0'
         run: |
-          if [ ! -s changed-files.txt ]; then
-            echo "No changed files found. Skipping accessibility scan."
-            exit 0
-          fi
+          # Written into .a11y-tools/ so ESM imports resolve from .a11y-tools/node_modules/
+          cat > .a11y-tools/eslint.config.a11y.mjs << 'EOF'
+          import jsxA11y from 'eslint-plugin-jsx-a11y';
+          import tsParser from '@typescript-eslint/parser';
 
-          mkdir -p .a11y-results
+          export default [
+            {
+              files: ['**/*.{js,jsx,ts,tsx}'],
+              plugins: { 'jsx-a11y': jsxA11y },
+              languageOptions: {
+                parser: tsParser,
+                parserOptions: {
+                  ecmaVersion: 2021,
+                  sourceType: 'module',
+                  ecmaFeatures: { jsx: true },
+                },
+              },
+              rules: jsxA11y.configs.recommended.rules,
+            },
+          ];
+          EOF
 
-          while read file; do
-            echo "Scanning: $file"
+      - name: Run ESLint on JSX/TSX files
+        if: steps.changed-files.outputs.jsx_count != '0'
+        run: |
+          cat << 'SCRIPT' > eslint-to-findings.js
+          const fs              = require('fs');
+          const path            = require('path');
+          const { spawnSync }   = require('child_process');
 
-            filename=$(echo "$file" | tr '/' '_')
+          const CHANGED_FILES_PATH = 'changed-jsx.txt';
+          const OUT_DIR            = '.a11y-results';
+          const REPO_ROOT          = process.env.GITHUB_WORKSPACE || process.cwd();
+          const CONFIG_PATH        = path.resolve('.a11y-tools/eslint.config.a11y.mjs');
+          const ESLINT_BIN         = path.resolve('.a11y-tools/node_modules/.bin/eslint');
 
-            pa11y "file://$(pwd)/$file" \
-              --standard WCAG2AA \
-              --reporter json \
-              --config ./pa11y.json \
-              > ".a11y-results/${filename}.json" || true
+          const raw      = fs.readFileSync(CHANGED_FILES_PATH, 'utf8').trim();
+          const jsxFiles = raw.split('\n').map(f => f.trim()).filter(Boolean);
 
-          done < changed-files.txt
+          if (jsxFiles.length === 0) {
+            console.log('No JSX/TSX files to lint.');
+            process.exit(0);
+          }
+
+          console.log(`Linting ${jsxFiles.length} JSX/TSX file(s)`);
+
+          const eslintRun = spawnSync(
+            ESLINT_BIN,
+            [
+              '--flag', 'unstable_config_lookup_from_file',
+              '--config', CONFIG_PATH,
+              '--format', 'json',
+              ...jsxFiles,
+            ],
+            { encoding: 'utf8', cwd: REPO_ROOT }
+          );
+
+          if (eslintRun.error) throw eslintRun.error;
+          if ((eslintRun.status || 0) >= 2) {
+            throw new Error(`ESLint exited with code ${eslintRun.status}:\n${eslintRun.stderr || ''}`);
+          }
+
+          const eslintOut = (eslintRun.stdout || '').trim();
+          if (!eslintOut) {
+            console.log('ESLint produced no output. Treating as no findings.');
+            process.exit(0);
+          }
+
+          const fileResults = JSON.parse(eslintOut);
+          fs.mkdirSync(OUT_DIR, { recursive: true });
+
+          let totalIssues     = 0;
+          let filesWithIssues = 0;
+
+          for (const fileResult of fileResults) {
+            const a11yMessages = fileResult.messages.filter(
+              m => m.ruleId != null && m.ruleId.startsWith('jsx-a11y/')
+            );
+            if (a11yMessages.length === 0) continue;
+
+            const relSource   = path.relative(REPO_ROOT, fileResult.filePath);
+            const sourceLines = (fileResult.source || '').split('\n');
+
+            const findings = a11yMessages.map(m => ({
+              code:       m.ruleId,
+              type:       m.severity === 2 ? 'error' : 'warning',
+              message:    m.message,
+              context:    (sourceLines[m.line - 1] || '').trim(),
+              selector:   `line:${m.line}:${m.column}`,
+              sourceFile: relSource,
+            }));
+
+            totalIssues     += findings.length;
+            filesWithIssues += 1;
+
+            const safeName = relSource.replace(/[/\\]/g, '_').replace(/\.[jt]sx?$/, '');
+            const outFile  = path.join(OUT_DIR, `jsx-a11y__${safeName}.json`);
+            fs.writeFileSync(outFile, JSON.stringify(findings, null, 2));
+            console.log(`${relSource}: ${findings.length} issue(s) -> ${outFile}`);
+          }
+
+          console.log(`\nDone. ${totalIssues} jsx-a11y issue(s) across ${filesWithIssues} file(s).`);
+          SCRIPT
+          node eslint-to-findings.js
+
+      - name: Setup PHP
+        if: steps.changed-files.outputs.php_count != '0'
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: '8.3'
+
+      - name: Write Pa11y manifest runner
+        if: steps.changed-files.outputs.php_count != '0' || steps.changed-files.outputs.html_count != '0'
+        run: |
+          cat << 'SCRIPT' > run-pa11y-on-manifest.js
+          const fs            = require('fs');
+          const path          = require('path');
+          const { spawnSync } = require('child_process');
+
+          const [,, manifestPath, outDir, prefix = 'pa11y'] = process.argv;
+
+          if (!manifestPath || !outDir) {
+            console.error('Usage: node run-pa11y-on-manifest.js <manifest.json> <output-dir> <prefix>');
+            process.exit(3);
+          }
+
+          const PA11Y_BIN = path.resolve('.a11y-tools/node_modules/.bin/pa11y');
+          const manifest  = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+          fs.mkdirSync(outDir, { recursive: true });
+
+          let totalIssues = 0;
+
+          for (const { source, extracted } of manifest) {
+            const absExtracted = path.resolve(extracted);
+
+            if (!fs.existsSync(absExtracted)) {
+              console.warn(`Skipping ${source}: extracted file not found (${extracted})`);
+              continue;
+            }
+
+            console.log(`Pa11y (${prefix}): ${source}`);
+
+            const run = spawnSync(
+              PA11Y_BIN,
+              [
+                `file://${absExtracted}`,
+                '--standard', 'WCAG2AA',
+                '--reporter',  'json',
+                '--config',    './pa11y.json',
+              ],
+              { encoding: 'utf8' }
+            );
+
+            if (run.error) throw run.error;
+
+            if (run.status === 1) {
+              const errOut = (run.stderr || '').trim();
+              console.warn(`  ::warning::pa11y failed for ${source} (exit ${run.status})${errOut ? ': ' + errOut : ''}. Skipping.`);
+              continue;
+            }
+
+            const out    = (run.stdout || '').trim();
+            let   issues = [];
+
+            if (out) {
+              try {
+                const parsed = JSON.parse(out);
+                issues = Array.isArray(parsed) ? parsed : [];
+              } catch (e) {
+                console.warn(`  Could not parse pa11y output for ${source}: ${e.message}`);
+              }
+            }
+
+            for (const issue of issues) {
+              issue.sourceFile    = source;
+              issue.extractedFrom = extracted;
+            }
+
+            totalIssues += issues.length;
+
+            const safeName = source.replace(/[/\\]/g, '_').replace(/\.(php|html?)$/, '');
+            const outFile  = path.join(outDir, `${prefix}__${safeName}.json`);
+            fs.writeFileSync(outFile, JSON.stringify(issues, null, 2));
+            console.log(`  ${issues.length} issue(s) -> ${outFile}`);
+          }
+
+          console.log(`\nDone. ${totalIssues} total issue(s) across ${manifest.length} file(s).`);
+          SCRIPT
+
+      - name: Write PHP inline HTML extractor
+        if: steps.changed-files.outputs.php_count != '0'
+        run: |
+          cat > extract-inline-html.php << 'PHPEOF'
+          <?php
+
+          if ($argc < 3) {
+              fwrite(STDERR, "Usage: php extract-inline-html.php <input.php> <output.html>\n");
+              exit(3);
+          }
+
+          $inputFile  = $argv[1];
+          $outputFile = $argv[2];
+
+          if (!is_file($inputFile)) {
+              fwrite(STDERR, "Input file not found: {$inputFile}\n");
+              exit(3);
+          }
+
+          $lintOutput = [];
+          $lintExit   = 0;
+          exec('php -l ' . escapeshellarg($inputFile) . ' 2>&1', $lintOutput, $lintExit);
+
+          if ($lintExit !== 0) {
+              fwrite(STDERR, "PHP syntax invalid, skipping: {$inputFile}\n");
+              fwrite(STDERR, implode("\n", $lintOutput) . "\n");
+              exit(2);
+          }
+
+          $source = file_get_contents($inputFile);
+          if ($source === false) {
+              fwrite(STDERR, "Could not read file: {$inputFile}\n");
+              exit(3);
+          }
+
+          $tokens     = token_get_all($source);
+          $htmlChunks = [];
+
+          foreach ($tokens as $token) {
+              if (!is_array($token)) continue;
+              [$id, $text] = $token;
+              if ($id === T_INLINE_HTML) $htmlChunks[] = $text;
+          }
+
+          $markup = trim(implode("\n", $htmlChunks));
+          if ($markup === '') exit(1);
+
+          $relPath = basename($inputFile);
+          $page    = "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n    <meta charset=\"UTF-8\">\n    <title>Extracted markup: {$relPath}</title>\n</head>\n<body>\n{$markup}\n</body>\n</html>\n";
+
+          $dir = dirname($outputFile);
+          if (!is_dir($dir)) mkdir($dir, 0777, true);
+
+          file_put_contents($outputFile, $page);
+          fwrite(STDOUT, "Extracted inline HTML from {$inputFile} -> {$outputFile}\n");
+          exit(0);
+          PHPEOF
+
+      - name: Extract inline HTML from PHP files
+        if: steps.changed-files.outputs.php_count != '0'
+        run: |
+          cat << 'SCRIPT' > extract-php-html.js
+          const fs            = require('fs');
+          const path          = require('path');
+          const { spawnSync } = require('child_process');
+
+          const CHANGED_FILES_PATH = 'changed-php.txt';
+          const TMP_DIR            = 'php-html-tmp';
+          const MANIFEST_PATH      = 'php-html-manifest.json';
+          const EXTRACTOR_SCRIPT   = path.resolve('extract-inline-html.php');
+          const REPO_ROOT          = process.env.GITHUB_WORKSPACE || process.cwd();
+
+          if (!fs.existsSync(CHANGED_FILES_PATH)) {
+            console.log(`${CHANGED_FILES_PATH} not found. Nothing to process.`);
+            fs.writeFileSync(MANIFEST_PATH, '[]');
+            process.exit(0);
+          }
+
+          const phpFiles = fs.readFileSync(CHANGED_FILES_PATH, 'utf8')
+            .split('\n').map(f => f.trim()).filter(Boolean);
+
+          if (phpFiles.length === 0) {
+            console.log('No PHP files to process.');
+            fs.writeFileSync(MANIFEST_PATH, '[]');
+            process.exit(0);
+          }
+
+          fs.mkdirSync(TMP_DIR, { recursive: true });
+          const manifest = [];
+
+          for (const file of phpFiles) {
+            const absFile = path.join(REPO_ROOT, file);
+
+            if (!fs.existsSync(absFile)) {
+              console.log(`::warning::Changed PHP file no longer exists, skipping: ${file}`);
+              continue;
+            }
+
+            const safe = file.replace(/\//g, '_');
+            const out  = path.join(TMP_DIR, `${safe}.html`);
+
+            const result = spawnSync('php', [EXTRACTOR_SCRIPT, absFile, out], { encoding: 'utf8' });
+            if (result.error) throw result.error;
+
+            switch (result.status) {
+              case 0:
+                manifest.push({ source: file, extracted: out });
+                console.log(`Extracted: ${file} -> ${out}`);
+                break;
+              case 1:
+                console.log(`No inline HTML in ${file}, skipping.`);
+                break;
+              case 2:
+                console.log(`::warning::PHP syntax error in ${file}, skipping.`);
+                if (result.stderr) process.stderr.write(result.stderr);
+                break;
+              default:
+                console.log(`::warning::Unexpected exit ${result.status} for ${file}, skipping.`);
+                break;
+            }
+          }
+
+          fs.writeFileSync(MANIFEST_PATH, JSON.stringify(manifest, null, 2));
+          console.log(`\n${manifest.length} PHP file(s) with inline HTML -> ${MANIFEST_PATH}`);
+          SCRIPT
+          node extract-php-html.js
+
+      - name: Run Pa11y against PHP-extracted HTML
+        if: steps.changed-files.outputs.php_count != '0'
+        run: node run-pa11y-on-manifest.js php-html-manifest.json .a11y-results php-html
+
+      - name: Wrap HTML pattern/template files
+        if: steps.changed-files.outputs.html_count != '0'
+        run: |
+          cat << 'SCRIPT' > wrap-html-patterns.js
+          const fs   = require('fs');
+          const path = require('path');
+
+          const CHANGED_FILES_PATH = 'changed-html.txt';
+          const TMP_DIR            = 'html-pattern-tmp';
+          const MANIFEST_PATH      = 'html-pattern-manifest.json';
+          const REPO_ROOT          = process.env.GITHUB_WORKSPACE || process.cwd();
+
+          if (!fs.existsSync(CHANGED_FILES_PATH)) {
+            console.log(`${CHANGED_FILES_PATH} not found. Nothing to process.`);
+            fs.writeFileSync(MANIFEST_PATH, '[]');
+            process.exit(0);
+          }
+
+          const htmlFiles = fs.readFileSync(CHANGED_FILES_PATH, 'utf8')
+            .split('\n').map(f => f.trim()).filter(Boolean);
+
+          if (htmlFiles.length === 0) {
+            console.log('No HTML pattern/template files to process.');
+            fs.writeFileSync(MANIFEST_PATH, '[]');
+            process.exit(0);
+          }
+
+          fs.mkdirSync(TMP_DIR, { recursive: true });
+          const manifest = [];
+
+          for (const file of htmlFiles) {
+            const absFile = path.join(REPO_ROOT, file);
+
+            if (!fs.existsSync(absFile)) {
+              console.log(`::warning::Changed HTML file no longer exists, skipping: ${file}`);
+              continue;
+            }
+
+            const markup = fs.readFileSync(absFile, 'utf8').trim();
+            if (markup === '') {
+              console.log(`${file} is empty, skipping.`);
+              continue;
+            }
+
+            const safe    = file.replace(/\//g, '_');
+            const outPath = path.join(TMP_DIR, `${safe}.html`);
+            const page    = [
+              '<!DOCTYPE html>',
+              '<html lang="en">',
+              '<head>',
+              '    <meta charset="UTF-8">',
+              `    <title>Pattern preview: ${path.basename(file)}</title>`,
+              '</head>',
+              '<body>',
+              markup,
+              '</body>',
+              '</html>',
+              '',
+            ].join('\n');
+
+            fs.writeFileSync(outPath, page, 'utf8');
+            manifest.push({ source: file, extracted: outPath });
+            console.log(`Wrapped: ${file} -> ${outPath}`);
+          }
+
+          fs.writeFileSync(MANIFEST_PATH, JSON.stringify(manifest, null, 2));
+          console.log(`\n${manifest.length} HTML pattern/template file(s) wrapped -> ${MANIFEST_PATH}`);
+          SCRIPT
+          node wrap-html-patterns.js
+
+      - name: Run Pa11y against wrapped HTML files
+        if: steps.changed-files.outputs.html_count != '0'
+        run: node run-pa11y-on-manifest.js html-pattern-manifest.json .a11y-results html-pattern
+
+      - name: Summarize baseline findings
+        run: |
+          set -euo pipefail
+          count=$(find .a11y-results -name '*.json' 2>/dev/null | wc -l | tr -d ' ')
+          echo "::notice::Collected baseline a11y findings from $count file(s) across legacy tools."
+          ls -la .a11y-results 2>/dev/null || true
 
       - name: Run Accessibility Review
-        uses: rtCamp/ax-review@v1.3.0
+        uses: rtCamp/ax-review@v1.4.0
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           llm-provider: litellm
@@ -110,11 +526,12 @@ jobs:
           batch-size: 10
           a11y-findings-dir: .a11y-results
 
-  # Job 2 - URL audit (Runs manually via workflow_dispatch)
+  # Job 2: URL audit (Runs manually via workflow_dispatch)
   url-audit:
     name: URL Accessibility Audit
-    runs-on: [self-hosted, high-performance]
+    runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch'
+    timeout-minutes: 45
 
     permissions:
       issues: write
@@ -123,12 +540,36 @@ jobs:
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: '22'
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-browsers-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            playwright-browsers-${{ runner.os }}-
+
+      - name: Install deps
+        run: |
+          npm init -y
+          npm install playwright @axe-core/playwright lighthouse pa11y
+
+      - name: Install Playwright browsers
+        run: |
+          if [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
+            echo "::notice::Playwright browsers restored from cache — installing OS deps only"
+            npx playwright install-deps chromium
+          else
+            echo "::notice::Playwright browser cache miss — full install"
+            npx playwright install --with-deps chromium
+          fi
 
       - name: Resolve URLs
         run: |
@@ -141,21 +582,14 @@ jobs:
           const inputType = process.env.INPUT_TYPE.trim();
           const input     = process.env.INPUT_VALUE.trim();
 
-          function fetch(url, depth = 0) {
-            if (depth > 5) return Promise.reject(new Error('Too many redirects'));
+          function fetch(url) {
             return new Promise((resolve, reject) => {
               const client = url.startsWith('https') ? http : httpPlain;
-              const options = {
-                headers: {
-                  'User-Agent': 'Mozilla/5.0',
-                  'Accept': 'text/xml,application/xml,*/*',
-                }
-              };
-              client.get(url, options, (res) => {
+              client.get(url, (res) => {
                 if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
                   const redirectUrl = res.headers.location;
                   res.resume();
-                  return resolve(fetch(redirectUrl, depth + 1));
+                  return resolve(fetch(redirectUrl));
                 }
                 let data = '';
                 res.on('data', chunk => data += chunk);
@@ -252,25 +686,15 @@ jobs:
           INPUT_TYPE:  ${{ github.event.inputs.input-type }}
           INPUT_VALUE: ${{ github.event.inputs.urls }}
 
-      - name: Install deps
+      - name: Write Pa11y config
         run: |
-          mkdir -p /tmp/a11y-runner-${{ github.run_id }}
-          cd /tmp/a11y-runner-${{ github.run_id }}
-          npm init -y
-          npm install playwright @axe-core/playwright lighthouse
-          npm install -g pa11y
-
-      - name: Install Playwright browsers
-        run: |
-          cd /tmp/a11y-runner-${{ github.run_id }}
-          npx playwright install --with-deps chromium
-
-      - name: Get Playwright Chromium path
-        run: |
-          cd /tmp/a11y-runner-${{ github.run_id }}
-          CHROME=$(node -e "const { chromium } = require('playwright'); console.log(chromium.executablePath())")
-          echo "CHROME_PATH=$CHROME" >> $GITHUB_ENV
-          echo "Using $CHROME"
+          cat > pa11y.json << 'EOF'
+          {
+            "chromeLaunchConfig": {
+              "args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
+            }
+          }
+          EOF
 
       - name: Run axe-core (Playwright)
         run: |
@@ -335,9 +759,7 @@ jobs:
               try {
                 await page.goto(url, { waitUntil: 'load', timeout: 30000 });
 
-                const results = await new AxeBuilder({ page })
-                  .disableRules(['color-contrast'])
-                  .analyze();
+                const results = await new AxeBuilder({ page }).analyze();
 
                 for (const violation of results.violations) {
                   for (const [nodeIndex, node] of violation.nodes.entries()) {
@@ -357,7 +779,7 @@ jobs:
                       await highlightedViewport(page, selector, filename);
                       console.log(`[screenshot] ${violation.id} > ${filename}`);
                     } catch {
-                      // If element screenshot fails (due to animation, obscured element, etd),
+                      // If element screenshot fails (due to animation, obscured element, etc.),
                       // fallback to full viewport screenshot to at least capture the issue in context.
                       await page.screenshot({ path: filename });
                       console.log(`[screenshot] ${violation.id} > ${filename} (fallback: viewport)`);
@@ -388,61 +810,53 @@ jobs:
           })();
           EOF
 
-          NODE_PATH=/tmp/a11y-runner-${{ github.run_id }}/node_modules \
           TEST_URLS="$(cat resolved-urls.txt)" node axe-test.js
 
       - name: Run Lighthouse
         run: |
-          mkdir -p lighthouse-reports
-          IFS=',' read -ra URL_ARRAY <<< "$(cat resolved-urls.txt)"
+          cat << 'SCRIPT' > run-lighthouse.js
+          const { chromium }     = require('playwright');
+          const { execFileSync } = require('child_process');
+          const fs               = require('fs');
+          const path             = require('path');
 
-          for url in "${URL_ARRAY[@]}"; do
-            url_trimmed=$(echo "$url" | xargs)
-            safe_name=$(echo "$url_trimmed" | sed 's/[^a-zA-Z0-9]/_/g')
+          // Use Playwright's bundled Chromium for consistent, hermetic runs.
+          const chromePath = chromium.executablePath();
+          process.env.CHROME_PATH = chromePath;
+          console.log(`Using Chrome at: ${chromePath}`);
 
-            echo "Lighthouse: $url_trimmed"
+          fs.mkdirSync('lighthouse-reports', { recursive: true });
 
-            /tmp/a11y-runner-${{ github.run_id }}/node_modules/.bin/lighthouse "$url_trimmed" \
-              --chrome-path="$CHROME_PATH" \
-              --only-categories=accessibility \
-              --chrome-flags="--headless --no-sandbox --disable-dev-shm-usage --disable-gpu" \
-              --output=json \
-              --output-path="lighthouse-reports/$safe_name.json" || true
+          const raw  = fs.readFileSync('resolved-urls.txt', 'utf8').trim();
+          const urls = raw.split(',').map(u => u.trim()).filter(Boolean);
 
-            if [ ! -f "lighthouse-reports/$safe_name.json" ]; then
-              echo "Lighthouse failed to produce a report"
-              exit 1
-            fi
+          for (const url of urls) {
+            const safeName   = url.replace(/[^a-zA-Z0-9]/g, '_');
+            const outputPath = path.join('lighthouse-reports', `${safeName}.json`);
 
-            score=$(node -e "
-              const r = require('./lighthouse-reports/$safe_name.json');
-              console.log(Math.round(r.categories.accessibility.score * 100));
-            ")
+            console.log(`Lighthouse: ${url}`);
 
-            if   [ "$score" -ge 90 ]; then icon="🟢 Pass"
-            elif [ "$score" -ge 50 ]; then icon="🟡 Needs Improvement"
-            else                           icon="🔴 Critical Fail"
-            fi
+            try {
+              execFileSync('npx', [
+                'lighthouse', url,
+                '--only-categories=accessibility',
+                '--chrome-flags=--headless --no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu',
+                '--output=json',
+                `--output-path=${outputPath}`,
+              ], { stdio: 'inherit' });
 
-            echo "$icon — Score: $score / 100"
-            echo "----------------------------------"
-          done
+              const report = JSON.parse(fs.readFileSync(outputPath, 'utf8'));
+              const score  = Math.round((report.categories?.accessibility?.score ?? 0) * 100);
+              const label  = score >= 90 ? '🟢 Pass' : score >= 50 ? '🟡 Needs Improvement' : '🔴 Critical Fail';
+              console.log(`${label} — Score: ${score} / 100`);
+            } catch (err) {
+              console.error(`Lighthouse failed for ${url}: ${err.message}`);
+            }
 
-      - name: Create Pa11y config
-        run: |
-          cat > pa11y.json << 'EOF'
-          {
-            "chromeLaunchConfig": {
-              "args": ["--no-sandbox", "--disable-setuid-sandbox"]
-            },
-            "ignore": [
-              "WCAG2AA.Principle1.Guideline1_4.1_4_3.G18.Fail",
-              "WCAG2AA.Principle1.Guideline1_4.1_4_3.G145.Fail",
-              "WCAG2AA.Principle1.Guideline1_4.1_4_3.F24.FG",
-              "WCAG2AA.Principle1.Guideline1_4.1_4_3.F24.BG"
-            ]
+            console.log('----------------------------------');
           }
-          EOF
+          SCRIPT
+          node run-lighthouse.js
 
       - name: Run Pa11y
         run: |
@@ -454,7 +868,7 @@ jobs:
             url_trimmed=$(echo "$url" | xargs)
             echo "Pa11y: $url_trimmed"
 
-            pa11y "$url_trimmed" \
+            npx pa11y "$url_trimmed" \
               --standard WCAG2AA \
               --reporter json \
               --config ./pa11y.json \
@@ -598,7 +1012,6 @@ jobs:
           })();
           SSEOF
 
-          NODE_PATH=/tmp/a11y-runner-${{ github.run_id }}/node_modules \
           node pa11y-screenshots.js
 
       - name: Generate consolidated Markdown report
@@ -894,25 +1307,31 @@ jobs:
           node generate-html-report.js
 
       - name: Upload A11y Report
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: a11y-compliance-report
+          retention-days: 7
+          if-no-files-found: error
           path: a11y-report/report.md
 
       - name: Upload HTML Report
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: a11y-html-report
+          retention-days: 7
+          if-no-files-found: error
           path: a11y-report/report.html
 
       - name: Upload Screenshots
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: a11y-screenshots
+          retention-days: 7
+          if-no-files-found: warn
           path: screenshots/
 
       - name: Create GitHub Issue
-        uses: actions/github-script@v8
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         with:
           script: |
             const fs = require('fs');
@@ -1000,7 +1419,3 @@ jobs:
               body,
               labels: ['accessibility'],
             });
-
-      - name: Cleanup runner temp dir
-        if: always()
-        run: rm -rf /tmp/a11y-runner-${{ github.run_id }}
